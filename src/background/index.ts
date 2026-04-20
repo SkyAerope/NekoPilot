@@ -75,6 +75,8 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         agentLoop.abort();
         agentLoop = null;
       }
+      // 清理页面上残留的 click/scroll 标记
+      tools.removeClickMarker().catch(() => {});
       return { ok: true };
     }
     case "agent:reset": {
@@ -83,6 +85,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         agentLoop.abort();
         agentLoop = null;
       }
+      tools.removeClickMarker().catch(() => {});
       return { ok: true };
     }
     case "agent:truncateBeforeUserTurn": {
@@ -101,6 +104,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         agentLoop.abort();
         agentLoop = null;
       }
+      tools.removeClickMarker().catch(() => {});
       return { ok: true, remaining: conversationHistory.length };
     }
     case "agent:approve": {
