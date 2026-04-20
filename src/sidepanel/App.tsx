@@ -548,7 +548,7 @@ export default function App() {
           if (seg.kind === "user") {
             return (
               <Box key={seg.entry.id} sx={{ mb: 2, mt: 1 }}>
-                <Paper sx={{ p: 1.5, bgcolor: "background.paper", borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   <Typography variant="body2">{seg.entry.content}</Typography>
                   {seg.entry.pickedElements && seg.entry.pickedElements.length > 0 && (
                     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
@@ -599,6 +599,12 @@ export default function App() {
           }
           return null;
         })}
+        {running && (logs.length === 0 || logs[logs.length - 1].type === "user") && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 1, pl: 0.5 }}>
+            <CircularProgress size={14} />
+            <Typography variant="body2" sx={{ opacity: 0.5 }}>思考中...</Typography>
+          </Box>
+        )}
         <div ref={logsEndRef} />
       </Box>
 
@@ -956,11 +962,11 @@ function ToolCallStep({
     <Box>
       {/* 操作标签 */}
       <Box
-        onClick={hasResult && !isScreenshot ? onToggle : undefined}
+        onClick={hasResult ? onToggle : undefined}
         sx={{
           display: "flex", alignItems: "center", gap: 0.75,
-          cursor: hasResult && !isScreenshot ? "pointer" : "default",
-          "&:hover": hasResult && !isScreenshot ? { opacity: 0.8 } : {},
+          cursor: hasResult ? "pointer" : "default",
+          "&:hover": hasResult ? { opacity: 0.8 } : {},
         }}
       >
         <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px" }}>
@@ -976,7 +982,7 @@ function ToolCallStep({
           <ErrorOutlineIcon sx={{ fontSize: 14, color: "error.main" }} />
         )}
 
-        {hasResult && !isScreenshot && (
+        {hasResult && (
           <ExpandMoreIcon
             sx={{
               fontSize: 16,
@@ -988,16 +994,18 @@ function ToolCallStep({
         )}
       </Box>
 
-      {/* 截图缩略图 */}
+      {/* 截图缩略图 — 可折叠 */}
       {isScreenshot && entry.screenshotData && (
-        <Box
-          component="img"
-          src={`data:image/png;base64,${entry.screenshotData}`}
-          sx={{
-            width: 80, height: 50, objectFit: "cover",
-            borderRadius: 1, mt: 0.5, border: 1, borderColor: "divider", display: "block",
-          }}
-        />
+        <Collapse in={expanded}>
+          <Box
+            component="img"
+            src={`data:image/png;base64,${entry.screenshotData}`}
+            sx={{
+              width: 80, height: 50, objectFit: "cover",
+              borderRadius: 1, mt: 0.5, border: 1, borderColor: "divider", display: "block",
+            }}
+          />
+        </Collapse>
       )}
 
       {/* 权限确认 */}
