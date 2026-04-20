@@ -39,6 +39,8 @@ import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
 
@@ -671,9 +673,67 @@ function StepItem({
       {/* 内容列 */}
       <Box sx={{ flex: 1, minWidth: 0, pb: 1.5, pl: 1 }}>
         {entry.type === "assistant" && (
-          <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6 }}>
-            {entry.content}
-          </Typography>
+          <Box
+            sx={{
+              wordBreak: "break-word",
+              lineHeight: 1.6,
+              fontSize: "0.875rem",
+              "& p": { m: 0, mb: 1, "&:last-child": { mb: 0 } },
+              "& ul, & ol": { my: 0.5, pl: 2.5 },
+              "& li": { mb: 0.25 },
+              "& pre": {
+                bgcolor: "background.default",
+                borderRadius: 1,
+                p: 1.5,
+                overflow: "auto",
+                fontSize: "0.78rem",
+                my: 1,
+              },
+              "& code": {
+                fontFamily: "monospace",
+                fontSize: "0.82em",
+              },
+              "& :not(pre) > code": {
+                bgcolor: "action.selected",
+                borderRadius: 0.5,
+                px: 0.5,
+                py: 0.15,
+              },
+              "& blockquote": {
+                borderLeft: 3,
+                borderColor: "divider",
+                pl: 1.5,
+                ml: 0,
+                my: 1,
+                opacity: 0.8,
+              },
+              "& table": {
+                borderCollapse: "collapse",
+                width: "100%",
+                my: 1,
+                fontSize: "0.8rem",
+              },
+              "& th, & td": {
+                border: 1,
+                borderColor: "divider",
+                px: 1,
+                py: 0.5,
+                textAlign: "left",
+              },
+              "& th": { bgcolor: "action.hover", fontWeight: 600 },
+              "& h1, & h2, & h3, & h4": {
+                mt: 1.5,
+                mb: 0.5,
+                fontSize: "0.95rem",
+                fontWeight: 600,
+              },
+              "& a": { color: "primary.main" },
+              "& hr": { borderColor: "divider", my: 1.5 },
+              "& img": { maxWidth: "100%", borderRadius: 1 },
+            }}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content}</ReactMarkdown>
+          </Box>
         )}
 
         {entry.type === "thinking" && (

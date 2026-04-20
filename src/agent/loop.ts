@@ -124,8 +124,21 @@ export class AgentLoop {
     }
 
     const json = await resp.json();
-    const choice = json.choices[0].message;
-    return choice as ChatMessage;
+
+    // 部分 provider 会把 content 和 tool_calls 拆到不同 choices 里，需要合并
+    let content: string | null = null;
+    const toolCalls: ToolCall[] = [];
+    for (const choice of json.choices) {
+      const msg = choice.message;
+      if (msg.content && !content) content = msg.content;
+      if (msg.tool_calls) toolCalls.push(...msg.tool_calls);
+    }
+
+    return {
+      role: "assistant",
+      content,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    } as ChatMessage;
   }
 
   private async executeToolCall(toolCall: ToolCall): Promise<void> {
