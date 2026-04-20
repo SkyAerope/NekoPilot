@@ -347,18 +347,11 @@ export class ToolExecutor {
     const expression = `
       (function() {
         const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return JSON.stringify({ error: 'Element not found' });
-        const rect = el.getBoundingClientRect();
-        return JSON.stringify({
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-          top: Math.round(rect.top),
-          right: Math.round(rect.right),
-          bottom: Math.round(rect.bottom),
-          left: Math.round(rect.left),
-        });
+        if (!el) return 'error: Element not found';
+        const r = el.getBoundingClientRect();
+        const x = Math.round(r.x), y = Math.round(r.y);
+        const w = Math.round(r.width), h = Math.round(r.height);
+        return 'x: ' + x + '\\ny: ' + y + '\\nwidth: ' + w + '\\nheight: ' + h + '\\ncenter: (' + Math.round(x + w/2) + ', ' + Math.round(y + h/2) + ')';
       })()
     `;
     const result = await this.cdp.send<{ result: { value: string } }>(
