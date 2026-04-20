@@ -75,19 +75,25 @@ export default function App() {
     const listener = (message: { type: string; payload?: AgentEvent }) => {
       if (message.type !== "agent:event" || !message.payload) return;
       const event = message.payload;
+
+      if (event.type === "done") {
+        setRunning(false);
+        return;
+      }
+
+      // 将 agent 事件类型映射到日志类型
+      const logType: LogEntry["type"] =
+        event.type === "message" ? "assistant" : (event.type as LogEntry["type"]);
+
       const entry: LogEntry = {
         id: ++logIdCounter,
-        type: event.type as LogEntry["type"],
+        type: logType,
         content:
           typeof event.data === "string"
             ? event.data
             : JSON.stringify(event.data, null, 2),
         timestamp: Date.now(),
       };
-
-      if (event.type === "done") {
-        setRunning(false);
-      }
 
       setLogs((prev) => [...prev, entry]);
     };
