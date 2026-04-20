@@ -18,6 +18,7 @@ import {
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
+import CloseIcon from "@mui/icons-material/Close";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LinkIcon from "@mui/icons-material/Link";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
@@ -244,6 +245,15 @@ export default function App() {
       setPicking(false);
     }
   }, [picking, elementTextLimit]);
+
+  const handleCancelPick = useCallback(() => {
+    sendMessage("pick:cancel").catch(() => {});
+    // pick:start 的轮询会在下次检测到 null 时返回
+  }, []);
+
+  const handleDismissLog = useCallback((logId: number) => {
+    setLogs((prev) => prev.filter((l) => l.id !== logId));
+  }, []);
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -295,7 +305,7 @@ export default function App() {
       {/* 日志区 */}
       <Box sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
         {logs.map((log) => (
-          <LogItem key={log.id} entry={log} />
+          <LogItem key={log.id} entry={log} onDismiss={handleDismissLog} />
         ))}
         <div ref={logsEndRef} />
       </Box>
@@ -319,6 +329,7 @@ export default function App() {
                   color="warning"
                   variant="outlined"
                   icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
+                  onDelete={handleCancelPick}
                   sx={{ fontSize: "0.75rem" }}
                 />
               )}
@@ -492,9 +503,10 @@ const typeConfig: Record<
   error: { label: "错误", color: "error" },
 };
 
-function LogItem({ entry }: { entry: LogEntry }) {
+function LogItem({ entry, onDismiss }: { entry: LogEntry; onDismiss?: (id: number) => void }) {
   const config = typeConfig[entry.type];
   const isUser = entry.type === "user";
+  const isError = entry.type === "error";
 
   return (
     <Box sx={{ mb: 1, display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
@@ -509,21 +521,31 @@ function LogItem({ entry }: { entry: LogEntry }) {
           fontSize: "0.82rem",
           lineHeight: 1.5,
           bgcolor: isUser ? "primary.dark" : "background.paper",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 0.5,
         }}
       >
-        {entry.type === "tool_call" || entry.type === "tool_result" ? (
-          <Typography
-            component="pre"
-            variant="body2"
-            sx={{ fontFamily: "monospace", fontSize: "0.78rem", m: 0 }}
-          >
-            {entry.content}
-          </Typography>
-        ) : (
-          <Typography variant="body2">{entry.content}</Typography>
-        )}
-        {entry.type === "thinking" && (
-          <CircularProgress size={14} sx={{ ml: 1 }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          {entry.type === "tool_call" || entry.type === "tool_result" ? (
+            <Typography
+              component="pre"
+              variant="body2"
+              sx={{ fontFamily: "monospace", fontSize: "0.78rem", m: 0 }}
+            >
+              {entry.content}
+            </Typography>
+          ) : (
+            <Typography variant="body2">{entry.content}</Typography>
+          )}
+          {entry.type === "thinking" && (
+            <CircularProgress size={14} sx={{ ml: 1 }} />
+          )}
+        </Box>
+        {isError && onDismiss && (
+          <IconButton size="small" onClick={() => onDismiss(entry.id)} sx={{ ml: 0.5, mt: -0.5 }}>
+            <CloseIcon sx={{ fontSize: 14 }} />
+          </IconButton>
         )}
       </Paper>
     </Box>

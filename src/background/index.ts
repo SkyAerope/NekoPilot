@@ -88,10 +88,9 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
 
     // ── 元素选择器 ──
     case "pick:start": {
+      // 始终连接当前活动标签页
       const tab = await getActiveTab();
-      if (!cdp.isAttached) {
-        await cdp.attach(tab.id!);
-      }
+      await cdp.attach(tab.id!);
       // 注入元素选择器到页面
       const pickScript = `
         (function() {
@@ -101,11 +100,10 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           const overlay = document.createElement('div');
           overlay.id = '__nekopilot-overlay';
           overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2147483647;cursor:crosshair;outline:none;';
-          overlay.tabIndex = 0;
           document.body.appendChild(overlay);
-          overlay.focus();
 
           const highlight = document.createElement('div');
+          highlight.id = '__nekopilot-highlight';
           highlight.style.cssText = 'position:fixed;border:2px solid #a78bfa;background:rgba(167,139,250,0.15);pointer-events:none;z-index:2147483646;transition:all 0.05s;';
           document.body.appendChild(highlight);
 
@@ -148,23 +146,27 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
               };
             }
 
-            overlay.remove();
-            highlight.remove();
-            window.__nekopilotPicker = false;
-
-            // 通过 window message 传回结果
+            cleanup();
             window.__nekopilotPickResult = info;
           });
 
-          // ESC 取消
-          overlay.addEventListener('keydown', function(e) {
+          // ESC 取消 — 使用 capture 阶段确保拦截
+          function onKeyDown(e) {
             if (e.key === 'Escape') {
-              overlay.remove();
-              highlight.remove();
-              window.__nekopilotPicker = false;
+              e.preventDefault();
+              e.stopPropagation();
+              cleanup();
               window.__nekopilotPickResult = null;
             }
-          });
+          }
+          document.addEventListener('keydown', onKeyDown, true);
+
+          function cleanup() {
+            overlay.remove();
+            highlight.remove();
+            window.__nekopilotPicker = false;
+            document.removeEventListener('keydown', onKeyDown, true);
+          }
 
           function buildSelector(el) {
             if (el.id) return '#' + el.id;
@@ -199,12 +201,25 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           return { element: check.result.value };
         }
       }
-      // 超时
+      // 超时 — 清理 overlay 和 highlight
       await cdp.send("Runtime.evaluate", {
         expression:
-          "document.getElementById('__nekopilot-overlay')?.remove(); delete window.__nekopilotPicker; delete window.__nekopilotPickResult;",
+          "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); delete window.__nekopilotPicker; delete window.__nekopilotPickResult;",
       });
       return { element: null, timeout: true };
+    }
+
+    case "pick:cancel": {
+      // 从 UI 取消选择
+      try {
+        await cdp.send("Runtime.evaluate", {
+          expression:
+            "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); window.__nekopilotPicker = false; window.__nekopilotPickResult = null;",
+        });
+      } catch {
+        // CDP 可能已断开
+      }
+      return { ok: true };
     }
 
     default:

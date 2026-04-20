@@ -195,7 +195,7 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
               helperText="OpenAI 兼容的 API 地址"
             />
 
-            <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
               <Autocomplete
                 freeSolo
                 fullWidth
@@ -216,7 +216,6 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
                 <IconButton
                   onClick={handleFetchModels}
                   disabled={fetchingModels}
-                  sx={{ mt: 1 }}
                 >
                   {fetchingModels ? <CircularProgress size={20} /> : <RefreshIcon />}
                 </IconButton>
