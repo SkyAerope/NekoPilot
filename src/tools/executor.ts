@@ -214,6 +214,7 @@ export class ToolExecutor {
           if (val) lines.push('  value: ' + val);
           lines.push('  rect: ' + rect.x.toFixed(0) + ',' + rect.y.toFixed(0) + ',' + rect.width.toFixed(0) + 'x' + rect.height.toFixed(0));
         });
+        if (lines.length === 0) return 'no_results: 当前页面没有可见的可交互元素';
         return lines.join('\n');
       })()
     `;
@@ -340,24 +341,43 @@ export class ToolExecutor {
         const text = ${JSON.stringify(text)}.toLowerCase();
         const limit = ${limit};
         const tagFilter = ${JSON.stringify(tagFilter)}.toLowerCase();
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         const seen = new Set();
         const results = [];
-        while (walker.nextNode()) {
-          const node = walker.currentNode;
-          if (!node.textContent?.toLowerCase().includes(text)) continue;
-          const el = node.parentElement;
-          if (!el || seen.has(el)) continue;
+
+        function addEl(el) {
+          if (seen.has(el)) return;
           seen.add(el);
-          if (tagFilter && el.tagName.toLowerCase() !== tagFilter) continue;
+          if (tagFilter && el.tagName.toLowerCase() !== tagFilter) return;
           const rect = el.getBoundingClientRect();
-          if (rect.width === 0 && rect.height === 0) continue;
+          if (rect.width === 0 && rect.height === 0) return;
           let selector = el.tagName.toLowerCase();
           if (el.id) selector = '#' + el.id;
           else if (el.className && typeof el.className === 'string') selector += '.' + el.className.trim().split(/\\s+/).join('.');
           results.push({ tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().slice(0, 120), selector, rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } });
-          if (results.length >= limit) break;
         }
+
+        // 1. TreeWalker 遍历所有文本节点
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode() && results.length < limit) {
+          const node = walker.currentNode;
+          if (!node.textContent?.toLowerCase().includes(text)) continue;
+          const el = node.parentElement;
+          if (el) addEl(el);
+        }
+
+        // 2. 若 TreeWalker 未找到，用 querySelectorAll + innerText 兜底
+        //    处理文本跨子元素分布的场景
+        if (results.length === 0) {
+          const all = document.body.querySelectorAll('*');
+          for (const el of all) {
+            if (results.length >= limit) break;
+            if ((el.innerText || '').toLowerCase().includes(text)) {
+              addEl(el);
+            }
+          }
+        }
+
+        if (results.length === 0) return 'no_results: 未找到包含 "' + ${JSON.stringify(text)} + '" 的可见元素';
         return results.map(r => '- tag: ' + r.tag + '\n  text: ' + r.text + '\n  selector: ' + r.selector + '\n  rect: ' + r.rect.x + ',' + r.rect.y + ',' + r.rect.w + 'x' + r.rect.h).join('\n');
       })()
     `;

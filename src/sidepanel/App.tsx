@@ -218,6 +218,7 @@ export default function App() {
   const [autoMode, setAutoMode] = useState(false);
   const [modeMenuAnchor, setModeMenuAnchor] = useState<null | HTMLElement>(null);
   const [picking, setPicking] = useState(false);
+  const [pickHover, setPickHover] = useState<{ tag: string; text: string } | null>(null);
   const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [elementTextLimit, setElementTextLimit] = useState(128);
@@ -231,6 +232,18 @@ export default function App() {
       if (data.settings?.elementTextLimit != null) setElementTextLimit(data.settings.elementTextLimit);
     });
   }, []);
+
+  // 轮询元素选择器 hover 信息
+  useEffect(() => {
+    if (!picking) { setPickHover(null); return; }
+    const timer = setInterval(async () => {
+      try {
+        const res = await sendMessage<{ hover: { tag: string; text: string } | null }>("pick:hover");
+        setPickHover(res.hover);
+      } catch { setPickHover(null); }
+    }, 300);
+    return () => clearInterval(timer);
+  }, [picking]);
 
   // 监听 agent 事件
   useEffect(() => {
@@ -758,13 +771,13 @@ export default function App() {
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, px: 1.5, pt: 1, pb: 0 }}>
               {picking && (
                 <Chip
-                  label="正在选择元素..."
+                  label={pickHover ? `当前选择：<${pickHover.tag}> ${pickHover.text.slice(0, 30) || ""}` : "正在选择元素..."}
                   size="small"
                   color="warning"
                   variant="outlined"
                   icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
                   onDelete={handleCancelPick}
-                  sx={{ fontSize: "0.75rem" }}
+                  sx={{ fontSize: "0.75rem", maxWidth: 280 }}
                 />
               )}
               {pickedElements.map((el) => (

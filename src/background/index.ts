@@ -139,6 +139,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
             highlight.style.top = rect.top + 'px';
             highlight.style.width = rect.width + 'px';
             highlight.style.height = rect.height + 'px';
+            // 更新 hover 信息供 sidepanel 轮询
+            window.__nekopilotPickHover = {
+              tag: el.tagName.toLowerCase(),
+              text: (el.textContent || '').trim().slice(0, 60)
+            };
           });
 
           overlay.addEventListener('click', function(e) {
@@ -173,6 +178,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
             overlay.remove();
             highlight.remove();
             window.__nekopilotPicker = false;
+            delete window.__nekopilotPickHover;
           }
 
           function buildSelector(el) {
@@ -211,7 +217,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       // 超时 — 清理 overlay 和 highlight
       await cdp.send("Runtime.evaluate", {
         expression:
-          "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); delete window.__nekopilotPicker; delete window.__nekopilotPickResult;",
+          "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); delete window.__nekopilotPicker; delete window.__nekopilotPickResult; delete window.__nekopilotPickHover;",
       });
       return { element: null, timeout: true };
     }
@@ -221,12 +227,28 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       try {
         await cdp.send("Runtime.evaluate", {
           expression:
-            "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); window.__nekopilotPicker = false; window.__nekopilotPickResult = null;",
+            "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); window.__nekopilotPicker = false; window.__nekopilotPickResult = null; delete window.__nekopilotPickHover;",
         });
       } catch {
         // CDP 可能已断开
       }
       return { ok: true };
+    }
+
+    case "pick:hover": {
+      // 返回当前 hover 的元素信息
+      try {
+        const check = await cdp.send<{ result: { value: unknown } }>(
+          "Runtime.evaluate",
+          {
+            expression: "window.__nekopilotPickHover",
+            returnByValue: true,
+          }
+        );
+        return { hover: check.result.value ?? null };
+      } catch {
+        return { hover: null };
+      }
     }
 
     default:
