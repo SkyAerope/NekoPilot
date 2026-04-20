@@ -218,16 +218,22 @@ export class AgentLoop {
     } as ChatMessage;
   }
 
+  private static readonly READONLY_TOOLS = new Set([
+    "screenshot", "read_page_text", "read_page", "read_page_interactive",
+    "find_element", "get_element_text", "get_element_rect", "wait",
+  ]);
+
   private async executeToolCall(toolCall: ToolCall): Promise<void> {
     const { name, arguments: argsStr } = toolCall.function;
+    const needsPermission = this.config.permissionMode === "ask" && !AgentLoop.READONLY_TOOLS.has(name);
 
     this.emit({
       type: "tool_call",
-      data: { name, args: argsStr, id: toolCall.id, needsPermission: this.config.permissionMode === "ask" },
+      data: { name, args: argsStr, id: toolCall.id, needsPermission },
     });
 
-    // 在 ask 模式下等待用户确认
-    if (this.config.permissionMode === "ask") {
+    // 在 ask 模式下，仅对非只读工具等待用户确认
+    if (needsPermission) {
       const approved = await new Promise<boolean>((resolve) => {
         this.permissionResolve = resolve;
       });
