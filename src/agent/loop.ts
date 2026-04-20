@@ -471,6 +471,22 @@ export class AgentLoop {
       data: { name, args: argsStr, id: toolCall.id, needsPermission },
     });
 
+    // click 使用 selector 时，先检查元素是否存在，不存在直接拒绝
+    if (name === "click") {
+      try {
+        const args = JSON.parse(argsStr);
+        if (args.selector && typeof args.selector === "string") {
+          const exists = await this.tools.checkElement(args.selector);
+          if (!exists) {
+            const rejected = { success: false, error: `元素未找到: ${args.selector}` };
+            this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });
+            this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(rejected) });
+            return;
+          }
+        }
+      } catch { /* 解析失败，交给后续执行处理 */ }
+    }
+
     // 在 ask 模式下，仅对非只读工具等待用户确认
     if (needsPermission) {
       // click 工具显示坐标标记

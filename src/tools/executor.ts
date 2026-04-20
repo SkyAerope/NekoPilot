@@ -6,6 +6,19 @@ import type { ToolResult } from "./types";
 export class ToolExecutor {
   constructor(private cdp: CdpManager) {}
 
+  /** 安全执行 JS 表达式，检查 CDP exceptionDetails */
+  private async evaluate<T = string>(expression: string): Promise<T> {
+    const result = await this.cdp.send<{
+      result: { value: T };
+      exceptionDetails?: { exception?: { description?: string }; text?: string };
+    }>("Runtime.evaluate", { expression, returnByValue: true });
+    if (result.exceptionDetails) {
+      const desc = result.exceptionDetails.exception?.description || result.exceptionDetails.text || "Unknown JS error";
+      throw new Error(`Page script error: ${desc}`);
+    }
+    return result.result.value;
+  }
+
   async execute(
     name: string,
     params: Record<string, unknown>
@@ -79,6 +92,17 @@ export class ToolExecutor {
     }
   }
 
+  /** 检查 CSS 选择器是否能匹配到可见元素，返回 true/false */
+  async checkElement(selector: string): Promise<boolean> {
+    const expr = `(function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 || r.height > 0;
+    })()`;
+    return this.evaluate<boolean>(expr);
+  }
+
   // ── Click 坐标标记 ──
 
   async showClickMarker(x: number, y: number): Promise<void> {
@@ -134,11 +158,7 @@ export class ToolExecutor {
           + '\nlimit: ' + ${limit};
       })()
     `;
-    const result = await this.cdp.send<{ result: { value: string } }>(
-      "Runtime.evaluate",
-      { expression, returnByValue: true }
-    );
-    return result.result.value;
+    return this.evaluate(expression);
   }
 
   private async readPage(): Promise<string> {
@@ -183,46 +203,40 @@ export class ToolExecutor {
         return toYaml(simplify(document.body, 0), 0);
       })()
     `;
-    const result = await this.cdp.send<{ result: { value: string } }>(
-      "Runtime.evaluate",
-      { expression, returnByValue: true }
-    );
-    return result.result.value;
+    return this.evaluate(expression);
   }
 
   private async readPageInteractive(): Promise<string> {
     const expression = `
       (function() {
-        const selectors = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [tabindex]';
+        const selectors = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [tabindex], [onclick]';
         const elements = document.querySelectorAll(selectors);
         const lines = [];
         elements.forEach((el, i) => {
-          const rect = el.getBoundingClientRect();
-          if (rect.width === 0 && rect.height === 0) return;
-          const tag = el.tagName.toLowerCase();
-          const type = el.getAttribute('type') || '';
-          const role = el.getAttribute('role') || '';
-          const text = (el.textContent || '').trim().slice(0, 80);
-          const ph = el.getAttribute('placeholder') || '';
-          const val = el.value || '';
-          lines.push('- ref: interactive[' + i + ']');
-          lines.push('  tag: ' + tag);
-          if (type) lines.push('  type: ' + type);
-          if (role) lines.push('  role: ' + role);
-          if (text) lines.push('  text: ' + text);
-          if (ph) lines.push('  placeholder: ' + ph);
-          if (val) lines.push('  value: ' + val);
-          lines.push('  rect: ' + rect.x.toFixed(0) + ',' + rect.y.toFixed(0) + ',' + rect.width.toFixed(0) + 'x' + rect.height.toFixed(0));
+          try {
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return;
+            const tag = el.tagName.toLowerCase();
+            const type = el.getAttribute('type') || '';
+            const role = el.getAttribute('role') || '';
+            const text = (el.textContent || '').trim().slice(0, 80);
+            const ph = el.getAttribute('placeholder') || '';
+            const val = ('value' in el && typeof el.value === 'string') ? el.value : '';
+            lines.push('- ref: interactive[' + i + ']');
+            lines.push('  tag: ' + tag);
+            if (type) lines.push('  type: ' + type);
+            if (role) lines.push('  role: ' + role);
+            if (text) lines.push('  text: ' + text);
+            if (ph) lines.push('  placeholder: ' + ph);
+            if (val) lines.push('  value: ' + val);
+            lines.push('  rect: ' + rect.x.toFixed(0) + ',' + rect.y.toFixed(0) + ',' + rect.width.toFixed(0) + 'x' + rect.height.toFixed(0));
+          } catch(e) { /* 跳过异常元素 */ }
         });
         if (lines.length === 0) return 'no_results: 当前页面没有可见的可交互元素';
         return lines.join('\n');
       })()
     `;
-    const result = await this.cdp.send<{ result: { value: string } }>(
-      "Runtime.evaluate",
-      { expression, returnByValue: true }
-    );
-    return result.result.value;
+    return this.evaluate(expression);
   }
 
   private async click(x?: number, y?: number, selector?: string): Promise<void> {
@@ -235,13 +249,10 @@ export class ToolExecutor {
         const r = el.getBoundingClientRect();
         return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
       })()`;
-      const res = await this.cdp.send<{ result: { value: { x: number; y: number } | null } }>(
-        "Runtime.evaluate",
-        { expression: expr, returnByValue: true }
-      );
-      if (!res.result.value) throw new Error(`Element not found: ${selector}`);
-      cx = res.result.value.x;
-      cy = res.result.value.y;
+      const pos = await this.evaluate<{ x: number; y: number } | null>(expr);
+      if (!pos) throw new Error(`Element not found: ${selector}`);
+      cx = pos.x;
+      cy = pos.y;
     } else if (x !== undefined && y !== undefined) {
       cx = x;
       cy = y;
@@ -381,11 +392,7 @@ export class ToolExecutor {
         return results.map(r => '- tag: ' + r.tag + '\n  text: ' + r.text + '\n  selector: ' + r.selector + '\n  rect: ' + r.rect.x + ',' + r.rect.y + ',' + r.rect.w + 'x' + r.rect.h).join('\n');
       })()
     `;
-    const result = await this.cdp.send<{ result: { value: string } }>(
-      "Runtime.evaluate",
-      { expression, returnByValue: true }
-    );
-    return result.result.value;
+    return this.evaluate(expression);
   }
 
   private async getElementText(
@@ -405,11 +412,7 @@ export class ToolExecutor {
           + '\nlimit: ' + ${limit};
       })()
     `;
-    const result = await this.cdp.send<{ result: { value: string } }>(
-      "Runtime.evaluate",
-      { expression, returnByValue: true }
-    );
-    return result.result.value;
+    return this.evaluate(expression);
   }
 
   private async getElementRect(selector: string): Promise<string> {
@@ -423,10 +426,6 @@ export class ToolExecutor {
         return 'x: ' + x + '\\ny: ' + y + '\\nwidth: ' + w + '\\nheight: ' + h + '\\ncenter: (' + Math.round(x + w/2) + ', ' + Math.round(y + h/2) + ')';
       })()
     `;
-    const result = await this.cdp.send<{ result: { value: string } }>(
-      "Runtime.evaluate",
-      { expression, returnByValue: true }
-    );
-    return result.result.value;
+    return this.evaluate(expression);
   }
 }
