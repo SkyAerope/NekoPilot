@@ -625,7 +625,7 @@ export default function App() {
   const turns = useMemo(() => groupIntoTurns(segments), [segments]);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(new Set());
 
-  // 自动展开/折叠 steps 分组
+  // 自动展开/折叠 steps 分组与 thinking 块
   useEffect(() => {
     if (logs.length === 0) return;
     const last = logs[logs.length - 1];
@@ -635,7 +635,11 @@ export default function App() {
         groupStart--;
       }
       setExpandedGroupKeys((prev) => new Set([...prev, logs[groupStart].id]));
-    } else if (last.type === "assistant" || last.type === "thinking") {
+    } else if (last.type === "thinking") {
+      // 思考流式中：展开当前 thinking 块
+      setExpandedGroupKeys((prev) => new Set([...prev, last.id]));
+    } else if (last.type === "assistant") {
+      // 助手开始正式回复：折叠所有 steps 与 thinking
       setExpandedGroupKeys(new Set());
     }
   }, [logs]);
@@ -723,9 +727,12 @@ export default function App() {
               {turn.segments.map((seg) => {
                 if (seg.kind === "thinking") {
                   return (
-                    <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
-                    </Box>
+                    <ThinkingBlock
+                      key={seg.entry.id}
+                      entry={seg.entry}
+                      expanded={expandedGroupKeys.has(seg.entry.id)}
+                      onToggle={() => toggleGroup(seg.entry.id)}
+                    />
                   );
                 }
                 if (seg.kind === "assistant") {
@@ -928,6 +935,76 @@ export default function App() {
 }
 
 // ── 步骤时间线组件 ──
+
+// ── Thinking 可折叠块 ──
+
+function ThinkingBlock({
+  entry,
+  expanded,
+  onToggle,
+}: {
+  entry: LogEntry;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const preview = useMemo(() => {
+    const firstLine = entry.content.split("\n").find((l) => l.trim()) ?? "";
+    return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
+  }, [entry.content]);
+
+  return (
+    <Box sx={{ mb: 1 }}>
+      <Box
+        onClick={onToggle}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.5,
+          cursor: "pointer",
+          py: 0.5,
+          "&:hover": { opacity: 0.8 },
+          userSelect: "none",
+        }}
+      >
+        <Typography variant="body2" sx={{ opacity: 0.5, fontWeight: 500, fontStyle: "italic" }}>
+          Thinking
+        </Typography>
+        {!expanded && preview && (
+          <Typography
+            variant="caption"
+            sx={{ opacity: 0.4, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}
+          >
+            {preview}
+          </Typography>
+        )}
+        <ExpandMoreIcon
+          sx={{
+            fontSize: 16,
+            transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.2s",
+            opacity: 0.4,
+            ml: "auto",
+          }}
+        />
+      </Box>
+      <Collapse in={expanded}>
+        <Box
+          sx={{
+            pl: 1.25,
+            borderLeft: "2px solid",
+            borderColor: "divider",
+            opacity: 0.75,
+            ...markdownSx,
+            fontSize: "0.85rem",
+            "& p": { fontSize: "0.85rem", my: 0.5 },
+          }}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content}</ReactMarkdown>
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
 
 // ── Steps 可折叠分组 ──
 
