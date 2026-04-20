@@ -1,25 +1,31 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Box,
-  TextField,
   IconButton,
   Typography,
   Paper,
   Chip,
   Stack,
   Tooltip,
-  Switch,
-  FormControlLabel,
   CircularProgress,
   AppBar,
   Toolbar,
+  InputBase,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
 } from "@mui/material";
-import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LinkIcon from "@mui/icons-material/Link";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
+import MouseIcon from "@mui/icons-material/Mouse";
+import AddIcon from "@mui/icons-material/Add";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import CheckIcon from "@mui/icons-material/Check";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
 
@@ -38,6 +44,7 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [attached, setAttached] = useState(false);
   const [autoMode, setAutoMode] = useState(true);
+  const [modeMenuAnchor, setModeMenuAnchor] = useState<null | HTMLElement>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // 监听 agent 事件
@@ -163,6 +170,10 @@ export default function App() {
     [handleSend]
   );
 
+  const handleClearChat = useCallback(() => {
+    setLogs([]);
+  }, []);
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* 顶栏 */}
@@ -200,48 +211,117 @@ export default function App() {
         <div ref={logsEndRef} />
       </Box>
 
-      {/* 底栏 */}
-      <Paper
-        elevation={4}
-        sx={{ p: 1.5, borderTop: 1, borderColor: "divider" }}
-      >
-        <Stack direction="row" spacing={1} alignItems="flex-end">
-          <FormControlLabel
-            control={
-              <Switch
-                size="small"
-                checked={autoMode}
-                onChange={(_, v) => setAutoMode(v)}
-              />
-            }
-            label={
-              <Typography variant="caption">
-                {autoMode ? "Auto" : "Ask"}
-              </Typography>
-            }
-            sx={{ mr: 0 }}
-          />
-          <TextField
+      {/* 底栏 — 输入框 + 工具行 */}
+      <Box sx={{ p: 1.5, pt: 0 }}>
+        <Paper
+          variant="outlined"
+          sx={{
+            borderRadius: 3,
+            overflow: "hidden",
+          }}
+        >
+          {/* 输入区域 */}
+          <InputBase
             fullWidth
             multiline
             maxRows={4}
-            placeholder="输入你的指令..."
+            placeholder="Reply to NekoPilot"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={running}
+            sx={{
+              px: 2,
+              pt: 1.5,
+              pb: 0.5,
+              fontSize: "0.9rem",
+            }}
           />
-          {running ? (
-            <IconButton color="error" onClick={handleStop}>
-              <StopIcon />
-            </IconButton>
-          ) : (
-            <IconButton color="primary" onClick={handleSend} disabled={!input.trim()}>
-              <SendIcon />
-            </IconButton>
-          )}
-        </Stack>
-      </Paper>
+
+          {/* 底部工具行 */}
+          <Stack
+            direction="row"
+            alignItems="center"
+            sx={{ px: 1, pb: 0.5, pt: 0 }}
+          >
+            {/* 权限模式选择器 */}
+            <Box
+              onClick={(e) => setModeMenuAnchor(e.currentTarget)}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.5,
+                cursor: "pointer",
+                px: 1,
+                py: 0.5,
+                borderRadius: 1,
+                "&:hover": { bgcolor: "action.hover" },
+                userSelect: "none",
+              }}
+            >
+              <PlayArrowIcon sx={{ fontSize: 16, opacity: 0.7 }} />
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                {autoMode ? "Act without asking" : "Ask before acting"}
+              </Typography>
+              <KeyboardArrowDownIcon sx={{ fontSize: 14, opacity: 0.5 }} />
+            </Box>
+
+            <Menu
+              anchorEl={modeMenuAnchor}
+              open={Boolean(modeMenuAnchor)}
+              onClose={() => setModeMenuAnchor(null)}
+              anchorOrigin={{ vertical: "top", horizontal: "left" }}
+              transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+            >
+              <MenuItem
+                onClick={() => { setAutoMode(true); setModeMenuAnchor(null); }}
+                selected={autoMode}
+              >
+                <ListItemIcon>
+                  {autoMode && <CheckIcon fontSize="small" />}
+                </ListItemIcon>
+                <ListItemText>Act without asking</ListItemText>
+              </MenuItem>
+              <MenuItem
+                onClick={() => { setAutoMode(false); setModeMenuAnchor(null); }}
+                selected={!autoMode}
+              >
+                <ListItemIcon>
+                  {!autoMode && <CheckIcon fontSize="small" />}
+                </ListItemIcon>
+                <ListItemText>Ask before acting</ListItemText>
+              </MenuItem>
+            </Menu>
+
+            <Box sx={{ flexGrow: 1 }} />
+
+            {/* 右侧操作按钮 */}
+            <Tooltip title="连接页面">
+              <IconButton size="small" onClick={handleAttach}>
+                <MouseIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="新对话">
+              <IconButton size="small" onClick={handleClearChat}>
+                <AddIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
+            {running ? (
+              <Tooltip title="停止">
+                <IconButton size="small" onClick={handleStop}>
+                  <StopIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            ) : (
+              <Tooltip title="停止">
+                <IconButton size="small" disabled>
+                  <StopIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Stack>
+        </Paper>
+      </Box>
     </Box>
   );
 }

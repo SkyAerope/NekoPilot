@@ -10,9 +10,21 @@ import {
   MenuItem,
   Divider,
   Container,
+  AppBar,
+  Toolbar,
+  IconButton,
+  Tooltip,
+  Menu,
+  ListItemIcon,
+  ListItemText,
 } from "@mui/material";
 import SaveIcon from "@mui/icons-material/Save";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
+import LightModeIcon from "@mui/icons-material/LightMode";
+import DarkModeIcon from "@mui/icons-material/DarkMode";
+import SettingsBrightnessIcon from "@mui/icons-material/SettingsBrightness";
+import Brightness4Icon from "@mui/icons-material/Brightness4";
+import type { ThemeMode } from "../shared/theme";
 
 interface Settings {
   apiKey: string;
@@ -43,9 +55,17 @@ const providerPresets: Record<string, { baseUrl: string; models: string[] }> = {
   },
 };
 
-export default function Options() {
+export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onThemeChange: (m: ThemeMode) => void }) {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [saved, setSaved] = useState(false);
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+  const handleMenuOpen = (e: React.MouseEvent<HTMLElement>) => setAnchorEl(e.currentTarget);
+  const handleMenuClose = () => setAnchorEl(null);
+  const handleThemeChange = (m: ThemeMode) => {
+    onThemeChange(m);
+    handleMenuClose();
+  };
 
   useEffect(() => {
     chrome.storage.local.get("settings", (data) => {
@@ -72,16 +92,47 @@ export default function Options() {
   };
 
   return (
-    <Container maxWidth="sm" sx={{ py: 4 }}>
-      <Stack spacing={3}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <SmartToyIcon color="primary" fontSize="large" />
-          <Typography variant="h5" fontWeight={700}>
+    <>
+      <AppBar position="static" color="default" elevation={1}>
+        <Toolbar sx={{ gap: 1 }}>
+          <SmartToyIcon color="primary" />
+          <Typography variant="h6" component="h1" sx={{ flexGrow: 1 }}>
             NekoPilot 设置
           </Typography>
-        </Stack>
 
-        <Paper sx={{ p: 3 }}>
+          <Tooltip title="主题">
+            <IconButton onClick={handleMenuOpen} color="inherit">
+              <Brightness4Icon />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={anchorEl}
+            open={Boolean(anchorEl)}
+            onClose={handleMenuClose}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+          >
+            <MenuItem onClick={() => handleThemeChange("light")} selected={mode === "light"}>
+              <ListItemIcon><LightModeIcon fontSize="small" /></ListItemIcon>
+              <ListItemText>明亮模式</ListItemText>
+            </MenuItem>
+            <MenuItem onClick={() => handleThemeChange("dark")} selected={mode === "dark"}>
+              <ListItemIcon><DarkModeIcon fontSize="small" /></ListItemIcon>
+              <ListItemText>暗黑模式</ListItemText>
+            </MenuItem>
+            <Divider />
+            <MenuItem onClick={() => handleThemeChange("auto")} selected={mode === "auto"}>
+              <ListItemIcon><SettingsBrightnessIcon fontSize="small" /></ListItemIcon>
+              <ListItemText>跟随系统</ListItemText>
+            </MenuItem>
+          </Menu>
+        </Toolbar>
+      </AppBar>
+
+      <Container maxWidth="sm" sx={{ py: 4 }}>
+        <Stack spacing={3}>
+
+          <Paper sx={{ p: 3 }}>
           <Stack spacing={2.5}>
             <Typography variant="subtitle2" color="text.secondary">
               LLM 提供商
@@ -168,5 +219,6 @@ export default function Options() {
         </Paper>
       </Stack>
     </Container>
+    </>
   );
 }
