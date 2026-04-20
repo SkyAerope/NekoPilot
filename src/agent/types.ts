@@ -10,9 +10,12 @@ export interface AgentConfig {
 
 export type AgentEventType =
   | "thinking"
+  | "thinking_delta"
   | "tool_call"
   | "tool_result"
   | "message"
+  | "message_delta"
+  | "message_to_thinking"
   | "error"
   | "done";
 

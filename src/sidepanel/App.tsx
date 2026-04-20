@@ -221,6 +221,30 @@ export default function App() {
         return;
       }
 
+      if (event.type === "message_delta") {
+        const delta = typeof event.data === "string" ? event.data : "";
+        setLogs((prev) => {
+          const lastIdx = prev.findLastIndex((l) => l.type === "assistant");
+          if (lastIdx === -1) return prev;
+          const updated = [...prev];
+          updated[lastIdx] = { ...updated[lastIdx], content: updated[lastIdx].content + delta };
+          return updated;
+        });
+        return;
+      }
+
+      if (event.type === "message_to_thinking") {
+        // 流式中发现 content 其实是 thinking，把最后一个 assistant 改为 thinking
+        setLogs((prev) => {
+          const lastIdx = prev.findLastIndex((l) => l.type === "assistant");
+          if (lastIdx === -1) return prev;
+          const updated = [...prev];
+          updated[lastIdx] = { ...updated[lastIdx], type: "thinking" };
+          return updated;
+        });
+        return;
+      }
+
       if (event.type === "tool_call") {
         const data = event.data as { name: string; args: string; id: string; needsPermission?: boolean };
         setLogs((prev) => [...prev, {
@@ -254,14 +278,24 @@ export default function App() {
 
       if (event.type === "thinking") {
         const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
-        if (text) {
-          setLogs((prev) => [...prev, {
-            id: ++logIdCounter,
-            type: "thinking",
-            content: text,
-            timestamp: Date.now(),
-          }]);
-        }
+        setLogs((prev) => [...prev, {
+          id: ++logIdCounter,
+          type: "thinking",
+          content: text,
+          timestamp: Date.now(),
+        }]);
+        return;
+      }
+
+      if (event.type === "thinking_delta") {
+        const delta = typeof event.data === "string" ? event.data : "";
+        setLogs((prev) => {
+          const lastIdx = prev.findLastIndex((l) => l.type === "thinking");
+          if (lastIdx === -1) return prev;
+          const updated = [...prev];
+          updated[lastIdx] = { ...updated[lastIdx], content: updated[lastIdx].content + delta };
+          return updated;
+        });
         return;
       }
 

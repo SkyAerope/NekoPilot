@@ -79,15 +79,13 @@ export class AgentLoop {
         const rawContent = response.content ?? "";
         const text = typeof rawContent === "string" ? rawContent : rawContent.filter(p => p.type === "text").map(p => (p as { type: "text"; text: string }).text).join("");
         this.messages.push({ role: "assistant", content: text });
-        this.emit({ type: "message", data: text });
+        // 流式已经通过 message_delta 发送了内容，这里只发 done
         this.emit({ type: "done", data: text });
         return { text, messages: this.messages.slice(1) };
       }
 
       // 有 tool_calls，执行
-      if (response.content) {
-        this.emit({ type: "thinking", data: response.content });
-      }
+      // 流式已经通过 thinking_delta 发送了 content
       this.messages.push(response);
 
       for (const toolCall of response.tool_calls) {
@@ -108,6 +106,7 @@ export class AgentLoop {
       model: this.config.model,
       messages: this.messages,
       tools: functions,
+      stream: true,
     };
 
     const resp = await fetch(`${this.config.baseUrl}/chat/completions`, {
@@ -124,20 +123,97 @@ export class AgentLoop {
       throw new Error(`LLM API error ${resp.status}: ${text}`);
     }
 
-    const json = await resp.json();
+    // 解析 SSE 流
+    let content = "";
+    const toolCallsMap = new Map<number, { id: string; type: "function"; function: { name: string; arguments: string } }>();
+    let hasContent = false;
+    let hasToolCalls = false;
+    // 追踪是否已经发过起始事件
+    let messageStarted = false;
+    let thinkingStarted = false;
 
-    // 部分 provider 会把 content 和 tool_calls 拆到不同 choices 里，需要合并
-    let content: string | null = null;
-    const toolCalls: ToolCall[] = [];
-    for (const choice of json.choices) {
-      const msg = choice.message;
-      if (msg.content && !content) content = msg.content;
-      if (msg.tool_calls) toolCalls.push(...msg.tool_calls);
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop()!; // 最后一行可能不完整
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") continue;
+
+        let chunk;
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        const delta = chunk.choices?.[0]?.delta;
+        if (!delta) continue;
+
+        // 累积 content
+        if (delta.content) {
+          content += delta.content;
+          hasContent = true;
+
+          // 在流式过程中还不知道最终有没有 tool_calls
+          // 先以 message_delta 发送，如果后续发现有 tool_calls 再切换
+          if (!hasToolCalls) {
+            if (!messageStarted) {
+              this.emit({ type: "message", data: "" });
+              messageStarted = true;
+            }
+            this.emit({ type: "message_delta", data: delta.content });
+          } else {
+            if (!thinkingStarted) {
+              this.emit({ type: "thinking", data: "" });
+              thinkingStarted = true;
+            }
+            this.emit({ type: "thinking_delta", data: delta.content });
+          }
+        }
+
+        // 累积 tool_calls
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!toolCallsMap.has(idx)) {
+              hasToolCalls = true;
+              // 第一次出现 tool_call，如果之前以 message 发过 content，需要通知 UI 切换为 thinking
+              if (messageStarted && !thinkingStarted && content) {
+                // 替换：之前的 message 其实是 thinking
+                this.emit({ type: "message_to_thinking", data: null });
+                thinkingStarted = true;
+              }
+              toolCallsMap.set(idx, {
+                id: tc.id ?? "",
+                type: "function",
+                function: { name: tc.function?.name ?? "", arguments: "" },
+              });
+            }
+            const existing = toolCallsMap.get(idx)!;
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.function.name = tc.function.name;
+            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+          }
+        }
+      }
     }
+
+    const toolCalls = Array.from(toolCallsMap.values()) as ToolCall[];
 
     return {
       role: "assistant",
-      content,
+      content: hasContent ? content : null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     } as ChatMessage;
   }
