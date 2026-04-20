@@ -88,10 +88,13 @@ export class AgentLoop {
       // 流式已经通过 thinking_delta 发送了 content
       this.messages.push(response);
 
+      const deferredMessages: ChatMessage[] = [];
       for (const toolCall of response.tool_calls) {
         if (this.aborted) break;
-        await this.executeToolCall(toolCall);
+        await this.executeToolCall(toolCall, deferredMessages);
       }
+      // 将截图等需要延迟的消息追加到所有 tool_result 之后
+      this.messages.push(...deferredMessages);
     }
 
     const msg = "达到最大迭代次数，Agent 停止。";
@@ -223,7 +226,7 @@ export class AgentLoop {
     "find_element", "get_element_text", "get_element_rect", "wait",
   ]);
 
-  private async executeToolCall(toolCall: ToolCall): Promise<void> {
+  private async executeToolCall(toolCall: ToolCall, deferredMessages: ChatMessage[]): Promise<void> {
     const { name, arguments: argsStr } = toolCall.function;
     const needsPermission = this.config.permissionMode === "ask" && !AgentLoop.READONLY_TOOLS.has(name);
 
@@ -286,7 +289,7 @@ export class AgentLoop {
         tool_call_id: toolCall.id,
         content: "Screenshot captured successfully.",
       });
-      this.messages.push({
+      deferredMessages.push({
         role: "user",
         content: [
           { type: "text", text: "[screenshot result]" },
