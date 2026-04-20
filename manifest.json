@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "NekoPilot",
+  "version": "0.1.0",
+  "description": "AI-powered browser automation assistant using Chrome Debugger API",
+  "permissions": [
+    "debugger",
+    "activeTab",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "NekoPilot"
+  },
+  "icons": {},
+  "options_page": "options.html"
+}
