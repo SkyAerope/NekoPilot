@@ -21,8 +21,9 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import LinkIcon from "@mui/icons-material/Link";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
-import MouseIcon from "@mui/icons-material/Mouse";
-import AddIcon from "@mui/icons-material/Add";
+import NearMeIcon from "@mui/icons-material/NearMe";
+import AttachFileIcon from "@mui/icons-material/AttachFile";
+import AddCommentIcon from "@mui/icons-material/AddComment";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import CheckIcon from "@mui/icons-material/Check";
@@ -183,6 +184,11 @@ export default function App() {
           <Typography variant="subtitle1" sx={{ fontWeight: 700, flexGrow: 1 }}>
             NekoPilot
           </Typography>
+          <Tooltip title="新建对话">
+            <IconButton size="small" onClick={handleClearChat}>
+              <AddCommentIcon />
+            </IconButton>
+          </Tooltip>
           <Tooltip title={attached ? "断开 CDP" : "连接 CDP"}>
             <IconButton size="small" onClick={handleAttach}>
               {attached ? (
@@ -296,14 +302,15 @@ export default function App() {
             <Box sx={{ flexGrow: 1 }} />
 
             {/* 右侧操作按钮 */}
-            <Tooltip title="连接页面">
-              <IconButton size="small" onClick={handleAttach}>
-                <MouseIcon sx={{ fontSize: 18 }} />
+            <Tooltip title="指定页面元素">
+              <IconButton size="small">
+                <NearMeIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Tooltip>
-            <Tooltip title="新对话">
-              <IconButton size="small" onClick={handleClearChat}>
-                <AddIcon sx={{ fontSize: 18 }} />
+            <Tooltip title="添加附件">
+              <IconButton size="small" component="label">
+                <AttachFileIcon sx={{ fontSize: 18 }} />
+                <input type="file" hidden accept="image/*,.pdf,.txt,.json,.csv" multiple />
               </IconButton>
             </Tooltip>
             {running ? (
