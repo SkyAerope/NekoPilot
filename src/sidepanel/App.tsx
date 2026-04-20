@@ -330,52 +330,54 @@ export default function App() {
           if (lastAsst === -1) return prev;
           const old = prev[lastAsst];
           const nextContent = old.content + delta;
-          // 在 assistant 内首次出现 <think> 开始标签：拆分成（前置 assistant 文本？）+ thinking entry
-          if (OPEN_TAG.test(nextContent)) {
-            const openMatch = nextContent.match(OPEN_TAG)!;
-            const openIdx = openMatch.index!;
-            const openLen = openMatch[0].length;
-            const before = nextContent.slice(0, openIdx); // assistant 中早于 <think> 的内容
-            const afterOpen = nextContent.slice(openIdx + openLen); // <think> 之后的内容（可能含 </think>）
-            const closeMatch = afterOpen.match(CLOSE_TAG);
+          // 触发条件：出现闭合标签 </think(ing)>，或出现开始标签 <think(ing)>
+          // — 闭合标签：之前的全部内容视为思考内容
+          // — 仅开始标签：转入未完成 thinking，等待后续 delta 出现闭合
+          const closeMatch = nextContent.match(CLOSE_TAG);
+          const openMatch = nextContent.match(OPEN_TAG);
+          if (closeMatch) {
+            const closeIdx = closeMatch.index!;
+            const closeLen = closeMatch[0].length;
+            const thinkPart = nextContent.slice(0, closeIdx + closeLen);
+            const tailPart = nextContent.slice(closeIdx + closeLen);
             const updated = [...prev];
-            // 先把 assistant entry 截断到 <think> 之前；若空则移除
+            const now = Date.now();
+            updated[lastAsst] = {
+              ...old,
+              type: "thinking",
+              content: thinkPart,
+              thinkingDone: true,
+              thinkSeconds: Math.max(1, Math.round((now - old.timestamp) / 1000)),
+            };
+            if (tailPart) {
+              updated.push({
+                id: ++logIdCounter,
+                type: "assistant",
+                content: tailPart,
+                timestamp: now,
+              });
+            }
+            return updated;
+          }
+          if (openMatch) {
+            // 仅有开始标签且未见闭合：把 entry 转为 thinking，开始标签前的内容若有则保留为前置 assistant
+            const openIdx = openMatch.index!;
+            const before = nextContent.slice(0, openIdx);
+            const fromOpen = nextContent.slice(openIdx);
+            const updated = [...prev];
+            const now = Date.now();
             if (before) {
               updated[lastAsst] = { ...old, content: before };
             } else {
               updated.splice(lastAsst, 1);
             }
-            const now = Date.now();
-            if (closeMatch) {
-              const closeIdx = closeMatch.index!;
-              const closeLen = closeMatch[0].length;
-              const thinkInner = afterOpen.slice(0, closeIdx + closeLen);
-              const tail = afterOpen.slice(closeIdx + closeLen);
-              updated.push({
-                id: ++logIdCounter,
-                type: "thinking",
-                content: openMatch[0] + thinkInner,
-                timestamp: now,
-                thinkingDone: true,
-                thinkSeconds: 1,
-              });
-              if (tail) {
-                updated.push({
-                  id: ++logIdCounter,
-                  type: "assistant",
-                  content: tail,
-                  timestamp: now,
-                });
-              }
-            } else {
-              updated.push({
-                id: ++logIdCounter,
-                type: "thinking",
-                content: openMatch[0] + afterOpen,
-                timestamp: now,
-                thinkingDone: false,
-              });
-            }
+            updated.push({
+              id: ++logIdCounter,
+              type: "thinking",
+              content: fromOpen,
+              timestamp: now,
+              thinkingDone: false,
+            });
             return updated;
           }
           // 普通 assistant 追加
