@@ -85,19 +85,20 @@ interface LogEntry {
 
 let logIdCounter = 0;
 
-/** 将含 <think>...</think> 的原始内容拆为思考与正文。
- *  仅当存在闭合的 </think> 时才会拆出 body；否则全部视为思考中。 */
+/** 将含 <think>...</think> 或 <thinking>...</thinking> 的原始内容拆为思考与正文。
+ *  仅当存在闭合标签时才会拆出 body；否则全部视为思考中。 */
 function splitThinkText(raw: string): { think: string; body: string } {
   if (!raw) return { think: "", body: "" };
-  const closeIdx = raw.search(/<\/think>/i);
-  if (closeIdx === -1) {
+  const closeMatch = raw.match(/<\/think(?:ing)?>/i);
+  if (!closeMatch) {
     // 还在思考中：剥掉可能的开头 <think> 前缀
-    return { think: raw.replace(/^\s*<think>/i, ""), body: "" };
+    return { think: raw.replace(/^\s*<think(?:ing)?>/i, ""), body: "" };
   }
-  const closeTag = raw.match(/<\/think>/i)![0];
+  const closeIdx = closeMatch.index!;
+  const closeLen = closeMatch[0].length;
   const before = raw.slice(0, closeIdx);
-  const after = raw.slice(closeIdx + closeTag.length);
-  const think = before.replace(/^\s*<think>/i, "").trim();
+  const after = raw.slice(closeIdx + closeLen);
+  const think = before.replace(/^\s*<think(?:ing)?>/i, "").trim();
   return { think, body: after.trim() };
 }
 
@@ -288,38 +289,97 @@ export default function App() {
 
       if (event.type === "message_delta") {
         const delta = typeof event.data === "string" ? event.data : "";
+        const OPEN_TAG = /<think(?:ing)?>/i;
+        const CLOSE_TAG = /<\/think(?:ing)?>/i;
         setLogs((prev) => {
-          // 若最后是 thinking 且未完成，继续追加到 thinking（有些供应商把 inline <think> 走 message 流）
           const lastThink = prev.findLastIndex((l) => l.type === "thinking");
           const lastAsst = prev.findLastIndex((l) => l.type === "assistant");
+          // 情况 A：当前正处在未完成的 thinking 中（thinking 在 assistant 之后）
           if (lastThink !== -1 && lastThink > lastAsst && !prev[lastThink].thinkingDone) {
-            const updated = [...prev];
-            const old = updated[lastThink];
+            const old = prev[lastThink];
             const nextContent = old.content + delta;
-            let thinkingDone = old.thinkingDone;
-            let thinkSeconds = old.thinkSeconds;
-            if (!thinkingDone && /<\/think>/i.test(nextContent)) {
-              thinkingDone = true;
-              thinkSeconds = Math.max(1, Math.round((Date.now() - old.timestamp) / 1000));
+            const closeMatch = nextContent.match(CLOSE_TAG);
+            if (!closeMatch) {
+              const updated = [...prev];
+              updated[lastThink] = { ...old, content: nextContent };
+              return updated;
             }
-            updated[lastThink] = { ...old, content: nextContent, thinkingDone, thinkSeconds };
+            // 检测到结束：截断 thinking 内容，剩余部分作为新的 assistant entry
+            const closeIdx = closeMatch.index!;
+            const closeLen = closeMatch[0].length;
+            const thinkPart = nextContent.slice(0, closeIdx + closeLen);
+            const tailPart = nextContent.slice(closeIdx + closeLen);
+            const updated = [...prev];
+            updated[lastThink] = {
+              ...old,
+              content: thinkPart,
+              thinkingDone: true,
+              thinkSeconds: Math.max(1, Math.round((Date.now() - old.timestamp) / 1000)),
+            };
+            if (tailPart) {
+              updated.push({
+                id: ++logIdCounter,
+                type: "assistant",
+                content: tailPart,
+                timestamp: Date.now(),
+              });
+            }
             return updated;
           }
+          // 情况 B：当前在 assistant 中
           if (lastAsst === -1) return prev;
-          const updated = [...prev];
-          const old = updated[lastAsst];
+          const old = prev[lastAsst];
           const nextContent = old.content + delta;
-          // 首次在 assistant 中检测到 <think>：把它变成 thinking entry
-          if (!old.thinkingDone && /<think>/i.test(nextContent)) {
-            let thinkingDone = false;
-            let thinkSeconds: number | undefined;
-            if (/<\/think>/i.test(nextContent)) {
-              thinkingDone = true;
-              thinkSeconds = Math.max(1, Math.round((Date.now() - old.timestamp) / 1000));
+          // 在 assistant 内首次出现 <think> 开始标签：拆分成（前置 assistant 文本？）+ thinking entry
+          if (OPEN_TAG.test(nextContent)) {
+            const openMatch = nextContent.match(OPEN_TAG)!;
+            const openIdx = openMatch.index!;
+            const openLen = openMatch[0].length;
+            const before = nextContent.slice(0, openIdx); // assistant 中早于 <think> 的内容
+            const afterOpen = nextContent.slice(openIdx + openLen); // <think> 之后的内容（可能含 </think>）
+            const closeMatch = afterOpen.match(CLOSE_TAG);
+            const updated = [...prev];
+            // 先把 assistant entry 截断到 <think> 之前；若空则移除
+            if (before) {
+              updated[lastAsst] = { ...old, content: before };
+            } else {
+              updated.splice(lastAsst, 1);
             }
-            updated[lastAsst] = { ...old, type: "thinking", content: nextContent, thinkingDone, thinkSeconds };
+            const now = Date.now();
+            if (closeMatch) {
+              const closeIdx = closeMatch.index!;
+              const closeLen = closeMatch[0].length;
+              const thinkInner = afterOpen.slice(0, closeIdx + closeLen);
+              const tail = afterOpen.slice(closeIdx + closeLen);
+              updated.push({
+                id: ++logIdCounter,
+                type: "thinking",
+                content: openMatch[0] + thinkInner,
+                timestamp: now,
+                thinkingDone: true,
+                thinkSeconds: 1,
+              });
+              if (tail) {
+                updated.push({
+                  id: ++logIdCounter,
+                  type: "assistant",
+                  content: tail,
+                  timestamp: now,
+                });
+              }
+            } else {
+              updated.push({
+                id: ++logIdCounter,
+                type: "thinking",
+                content: openMatch[0] + afterOpen,
+                timestamp: now,
+                thinkingDone: false,
+              });
+            }
             return updated;
           }
+          // 普通 assistant 追加
+          const updated = [...prev];
           updated[lastAsst] = { ...old, content: nextContent };
           return updated;
         });
@@ -1187,7 +1247,7 @@ function ThinkingStep({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const { think, body } = useMemo(() => splitThinkText(entry.content), [entry.content]);
+  const { think } = useMemo(() => splitThinkText(entry.content), [entry.content]);
   const done = !!entry.thinkingDone;
   const label = done
     ? `已思考 ${entry.thinkSeconds ?? 1} 秒`
@@ -1264,11 +1324,6 @@ function ThinkingStep({
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{think || previewSrc}</ReactMarkdown>
         </Box>
       </Collapse>
-      {body && (
-        <Box sx={{ mt: 0.75, ...markdownSx }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
-        </Box>
-      )}
     </Box>
   );
 }
