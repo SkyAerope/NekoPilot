@@ -103,6 +103,17 @@ export class ToolExecutor {
     return this.evaluate<boolean>(expr);
   }
 
+  /** 解析 CSS 选择器为元素中心点坐标，元素不存在返回 null */
+  async resolveSelectorCenter(selector: string): Promise<{ x: number; y: number } | null> {
+    const expr = `(function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    })()`;
+    return this.evaluate<{ x: number; y: number } | null>(expr);
+  }
+
   // ── Click 坐标标记 ──
 
   async showClickMarker(x: number, y: number): Promise<void> {

@@ -497,7 +497,15 @@ export class AgentLoop {
           if (name === "click") {
             const x = args.x as number | undefined;
             const y = args.y as number | undefined;
-            if (x !== undefined && y !== undefined) {
+            const sel = args.selector as string | undefined;
+            if (sel) {
+              // selector 路径：解析元素中心点
+              const pos = await this.tools.resolveSelectorCenter(sel).catch(() => null);
+              if (pos) {
+                await this.tools.showClickMarker(pos.x, pos.y);
+                showedMarker = true;
+              }
+            } else if (x !== undefined && y !== undefined) {
               await this.tools.showClickMarker(x, y);
               showedMarker = true;
             }
