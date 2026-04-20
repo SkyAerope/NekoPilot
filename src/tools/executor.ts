@@ -35,7 +35,7 @@ export class ToolExecutor {
       case "read_page_interactive":
         return this.readPageInteractive();
       case "click":
-        return this.click(params.x as number, params.y as number);
+        return this.click(params.x as number | undefined, params.y as number | undefined, params.selector as string | undefined);
       case "set_input":
         return this.setInput(
           params.selector as string,
@@ -169,8 +169,30 @@ export class ToolExecutor {
     return result.result.value;
   }
 
-  private async click(x: number, y: number): Promise<void> {
-    const common = { x, y, button: "left" as const, clickCount: 1 };
+  private async click(x?: number, y?: number, selector?: string): Promise<void> {
+    let cx: number;
+    let cy: number;
+    if (selector) {
+      const expr = `(function() {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`;
+      const res = await this.cdp.send<{ result: { value: { x: number; y: number } | null } }>(
+        "Runtime.evaluate",
+        { expression: expr, returnByValue: true }
+      );
+      if (!res.result.value) throw new Error(`Element not found: ${selector}`);
+      cx = res.result.value.x;
+      cy = res.result.value.y;
+    } else if (x !== undefined && y !== undefined) {
+      cx = x;
+      cy = y;
+    } else {
+      throw new Error("click requires either (x, y) or selector");
+    }
+    const common = { x: cx, y: cy, button: "left" as const, clickCount: 1 };
     await this.cdp.send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       ...common,

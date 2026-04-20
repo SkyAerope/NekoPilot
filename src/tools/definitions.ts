@@ -38,12 +38,12 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "click",
-    description: "在指定坐标处执行鼠标点击。",
+    description: "在指定坐标或选择器指定的元素上执行鼠标点击。传入 selector 时点击该元素的中央，此时 x/y 可省略。",
     parameters: {
-      x: { type: "number", description: "点击位置的 X 坐标" },
-      y: { type: "number", description: "点击位置的 Y 坐标" },
+      x: { type: "number", description: "点击位置的 X 坐标（与 selector 二选一）" },
+      y: { type: "number", description: "点击位置的 Y 坐标（与 selector 二选一）" },
+      selector: { type: "string", description: "目标元素的 CSS 选择器，点击其中心位置" },
     },
-    required: ["x", "y"],
   },
   {
     name: "set_input",

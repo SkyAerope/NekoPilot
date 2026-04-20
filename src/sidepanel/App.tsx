@@ -50,6 +50,7 @@ interface PickedElement {
   tag: string;
   selector: string;
   text: string;
+  rect: { x: number; y: number; w: number; h: number };
 }
 
 interface Attachment {
@@ -309,7 +310,7 @@ export default function App() {
     if (!text || running) return;
 
     const elementContext = pickedElements
-      .map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}"]`)
+      .map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
       .join("\n");
     const attachmentNames = attachments.map((a) => a.name);
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
@@ -404,6 +405,7 @@ export default function App() {
       const result = await sendMessage<{ element: Record<string, unknown> | null; timeout?: boolean }>("pick:start");
       if (result.element) {
         const el = result.element;
+        const rect = el.rect as { x: number; y: number; w: number; h: number } | undefined;
         setPickedElements((prev) => [
           ...prev,
           {
@@ -411,6 +413,7 @@ export default function App() {
             tag: String(el.tag),
             selector: String(el.selector),
             text: String(el.text || "").slice(0, elementTextLimit),
+            rect: rect ?? { x: 0, y: 0, w: 0, h: 0 },
           },
         ]);
       } else if (result.timeout) {
