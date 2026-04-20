@@ -39,6 +39,7 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import PsychologyAltOutlinedIcon from "@mui/icons-material/PsychologyAltOutlined";
 import EditIcon from "@mui/icons-material/Edit";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReactMarkdown from "react-markdown";
@@ -77,9 +78,25 @@ interface LogEntry {
   permissionResolved?: boolean;
   screenshotData?: string;
   pickedElements?: PickedElement[];
+  // thinking 相关
+  thinkingDone?: boolean;
+  thinkSeconds?: number;
 }
 
 let logIdCounter = 0;
+
+/** 将含 <think>...</think> 的原始内容拆为思考与正文 */
+function splitThinkText(raw: string): { think: string; body: string } {
+  if (!raw) return { think: "", body: "" };
+  // 匹配第一个 <think>...</think> 段
+  const m = raw.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
+  if (!m) return { think: "", body: raw };
+  const think = m[1] ?? "";
+  const before = raw.slice(0, m.index!);
+  const after = raw.slice(m.index! + m[0].length);
+  const body = (before + after).trim();
+  return { think: think.trim(), body };
+}
 
 // ── 工具图标与标签 ──
 
@@ -127,7 +144,6 @@ function getToolLabel(name?: string): string {
 
 type LogSegment =
   | { kind: "user"; entry: LogEntry }
-  | { kind: "thinking"; entry: LogEntry }
   | { kind: "assistant"; entry: LogEntry }
   | { kind: "steps"; entries: LogEntry[] };
 
@@ -145,10 +161,11 @@ function groupLogs(logs: LogEntry[]): LogSegment[] {
     }
   };
   for (const entry of logs) {
-    if (entry.type === "user" || entry.type === "thinking" || entry.type === "assistant") {
+    if (entry.type === "user" || entry.type === "assistant") {
       flushSteps();
       segments.push({ kind: entry.type, entry });
     } else {
+      // thinking / tool_call / error 都归入 steps
       currentSteps.push(entry);
     }
   }
@@ -269,10 +286,38 @@ export default function App() {
       if (event.type === "message_delta") {
         const delta = typeof event.data === "string" ? event.data : "";
         setLogs((prev) => {
-          const lastIdx = prev.findLastIndex((l) => l.type === "assistant");
-          if (lastIdx === -1) return prev;
+          // 若最后是 thinking 且未完成，继续追加到 thinking（有些供应商把 inline <think> 走 message 流）
+          const lastThink = prev.findLastIndex((l) => l.type === "thinking");
+          const lastAsst = prev.findLastIndex((l) => l.type === "assistant");
+          if (lastThink !== -1 && lastThink > lastAsst && !prev[lastThink].thinkingDone) {
+            const updated = [...prev];
+            const old = updated[lastThink];
+            const nextContent = old.content + delta;
+            let thinkingDone = old.thinkingDone;
+            let thinkSeconds = old.thinkSeconds;
+            if (!thinkingDone && /<\/think>/i.test(nextContent)) {
+              thinkingDone = true;
+              thinkSeconds = Math.max(1, Math.round((Date.now() - old.timestamp) / 1000));
+            }
+            updated[lastThink] = { ...old, content: nextContent, thinkingDone, thinkSeconds };
+            return updated;
+          }
+          if (lastAsst === -1) return prev;
           const updated = [...prev];
-          updated[lastIdx] = { ...updated[lastIdx], content: updated[lastIdx].content + delta };
+          const old = updated[lastAsst];
+          const nextContent = old.content + delta;
+          // 首次在 assistant 中检测到 <think>：把它变成 thinking entry
+          if (!old.thinkingDone && /<think>/i.test(nextContent)) {
+            let thinkingDone = false;
+            let thinkSeconds: number | undefined;
+            if (/<\/think>/i.test(nextContent)) {
+              thinkingDone = true;
+              thinkSeconds = Math.max(1, Math.round((Date.now() - old.timestamp) / 1000));
+            }
+            updated[lastAsst] = { ...old, type: "thinking", content: nextContent, thinkingDone, thinkSeconds };
+            return updated;
+          }
+          updated[lastAsst] = { ...old, content: nextContent };
           return updated;
         });
         return;
@@ -284,7 +329,8 @@ export default function App() {
           const lastIdx = prev.findLastIndex((l) => l.type === "assistant");
           if (lastIdx === -1) return prev;
           const updated = [...prev];
-          updated[lastIdx] = { ...updated[lastIdx], type: "thinking" };
+          const old = updated[lastIdx];
+          updated[lastIdx] = { ...old, type: "thinking", thinkingDone: false };
           return updated;
         });
         return;
@@ -334,6 +380,7 @@ export default function App() {
           type: "thinking",
           content: text,
           timestamp: Date.now(),
+          thinkingDone: false,
         }]);
         return;
       }
@@ -344,7 +391,16 @@ export default function App() {
           const lastIdx = prev.findLastIndex((l) => l.type === "thinking");
           if (lastIdx === -1) return prev;
           const updated = [...prev];
-          updated[lastIdx] = { ...updated[lastIdx], content: updated[lastIdx].content + delta };
+          const old = updated[lastIdx];
+          const nextContent = old.content + delta;
+          // 检测到 </think> 闭合：标记完成时间
+          let thinkingDone = old.thinkingDone;
+          let thinkSeconds = old.thinkSeconds;
+          if (!thinkingDone && /<\/think>/i.test(nextContent)) {
+            thinkingDone = true;
+            thinkSeconds = Math.max(1, Math.round((Date.now() - old.timestamp) / 1000));
+          }
+          updated[lastIdx] = { ...old, content: nextContent, thinkingDone, thinkSeconds };
           return updated;
         });
         return;
@@ -625,21 +681,23 @@ export default function App() {
   const turns = useMemo(() => groupIntoTurns(segments), [segments]);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(new Set());
 
-  // 自动展开/折叠 steps 分组与 thinking 块
+  // 自动展开/折叠 steps 分组
   useEffect(() => {
     if (logs.length === 0) return;
     const last = logs[logs.length - 1];
-    if (last.type === "tool_call") {
+    if (last.type === "tool_call" || last.type === "thinking") {
       let groupStart = logs.length - 1;
-      while (groupStart > 0 && (logs[groupStart - 1].type === "tool_call" || logs[groupStart - 1].type === "error")) {
+      while (
+        groupStart > 0 &&
+        (logs[groupStart - 1].type === "tool_call" ||
+          logs[groupStart - 1].type === "error" ||
+          logs[groupStart - 1].type === "thinking")
+      ) {
         groupStart--;
       }
       setExpandedGroupKeys((prev) => new Set([...prev, logs[groupStart].id]));
-    } else if (last.type === "thinking") {
-      // 思考流式中：展开当前 thinking 块
-      setExpandedGroupKeys((prev) => new Set([...prev, last.id]));
     } else if (last.type === "assistant") {
-      // 助手开始正式回复：折叠所有 steps 与 thinking
+      // 助手开始正式回复：折叠所有 steps
       setExpandedGroupKeys(new Set());
     }
   }, [logs]);
@@ -718,23 +776,13 @@ export default function App() {
           const isComplete = !isLast || !running;
           // 收集所有文本用于复制
           const allText = turn.segments.map((seg) => {
-            if (seg.kind === "thinking" || seg.kind === "assistant") return seg.entry.content;
+            if (seg.kind === "assistant") return seg.entry.content;
             if (seg.kind === "steps") return seg.entries.filter((e) => e.type === "tool_call").map((e) => `${getToolLabel(e.toolName)}: ${e.toolResult ?? "..."}`).join("\n");
             return "";
           }).filter(Boolean).join("\n\n");
           return (
             <Box key={turn.firstId} sx={{ mb: 2, "&:hover > .hover-actions": { opacity: 1 } }}>
               {turn.segments.map((seg) => {
-                if (seg.kind === "thinking") {
-                  return (
-                    <ThinkingBlock
-                      key={seg.entry.id}
-                      entry={seg.entry}
-                      expanded={expandedGroupKeys.has(seg.entry.id)}
-                      onToggle={() => toggleGroup(seg.entry.id)}
-                    />
-                  );
-                }
                 if (seg.kind === "assistant") {
                   return (
                     <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
@@ -936,76 +984,6 @@ export default function App() {
 
 // ── 步骤时间线组件 ──
 
-// ── Thinking 可折叠块 ──
-
-function ThinkingBlock({
-  entry,
-  expanded,
-  onToggle,
-}: {
-  entry: LogEntry;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const preview = useMemo(() => {
-    const firstLine = entry.content.split("\n").find((l) => l.trim()) ?? "";
-    return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
-  }, [entry.content]);
-
-  return (
-    <Box sx={{ mb: 1 }}>
-      <Box
-        onClick={onToggle}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.5,
-          cursor: "pointer",
-          py: 0.5,
-          "&:hover": { opacity: 0.8 },
-          userSelect: "none",
-        }}
-      >
-        <Typography variant="body2" sx={{ opacity: 0.5, fontWeight: 500, fontStyle: "italic" }}>
-          Thinking
-        </Typography>
-        {!expanded && preview && (
-          <Typography
-            variant="caption"
-            sx={{ opacity: 0.4, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}
-          >
-            {preview}
-          </Typography>
-        )}
-        <ExpandMoreIcon
-          sx={{
-            fontSize: 16,
-            transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
-            transition: "transform 0.2s",
-            opacity: 0.4,
-            ml: "auto",
-          }}
-        />
-      </Box>
-      <Collapse in={expanded}>
-        <Box
-          sx={{
-            pl: 1.25,
-            borderLeft: "2px solid",
-            borderColor: "divider",
-            opacity: 0.75,
-            ...markdownSx,
-            fontSize: "0.85rem",
-            "& p": { fontSize: "0.85rem", my: 0.5 },
-          }}
-        >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content}</ReactMarkdown>
-        </Box>
-      </Collapse>
-    </Box>
-  );
-}
-
 // ── Steps 可折叠分组 ──
 
 function StepsGroup({
@@ -1023,7 +1001,7 @@ function StepsGroup({
   onReject: (id: string) => void;
   onDismiss: (id: number) => void;
 }) {
-  const stepCount = entries.filter((e) => e.type === "tool_call").length;
+  const stepCount = entries.filter((e) => e.type === "tool_call" || e.type === "thinking").length;
 
   // 只有 1 步时直接显示，不包裹
   if (stepCount <= 1) {
@@ -1112,6 +1090,8 @@ function TimelineStep({
   const icon =
     entry.type === "error" ? (
       <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main" }} />
+    ) : entry.type === "thinking" ? (
+      <PsychologyAltOutlinedIcon sx={{ fontSize: 16, color: "text.secondary" }} />
     ) : (
       <Box sx={{ color: "text.secondary", display: "flex" }}>{getToolIcon(entry.toolName)}</Box>
     );
@@ -1161,6 +1141,14 @@ function TimelineStep({
           />
         )}
 
+        {entry.type === "thinking" && (
+          <ThinkingStep
+            entry={entry}
+            expanded={entry.thinkingDone ? expanded : true}
+            onToggle={() => setExpanded(!expanded)}
+          />
+        )}
+
         {entry.type === "error" && (
           <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
             <Typography variant="body2" sx={{ color: "error.main", flex: 1, lineHeight: 1.6 }}>
@@ -1172,6 +1160,95 @@ function TimelineStep({
           </Box>
         )}
       </Box>
+    </Box>
+  );
+}
+
+// ── 思考步骤 ──
+
+function ThinkingStep({
+  entry,
+  expanded,
+  onToggle,
+}: {
+  entry: LogEntry;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { think, body } = useMemo(() => splitThinkText(entry.content), [entry.content]);
+  const done = !!entry.thinkingDone;
+  const label = done
+    ? `已思考 ${entry.thinkSeconds ?? 1} 秒`
+    : "Thinking…";
+  const previewSrc = think || entry.content.replace(/<\/?think>/gi, "");
+  const preview = useMemo(() => {
+    const firstLine = previewSrc.split("\n").find((l) => l.trim()) ?? "";
+    return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
+  }, [previewSrc]);
+  const hasContent = !!(think || (!done && previewSrc));
+
+  return (
+    <Box>
+      <Box
+        onClick={hasContent ? onToggle : undefined}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.75,
+          cursor: hasContent ? "pointer" : "default",
+          "&:hover": hasContent ? { opacity: 0.85 } : {},
+          userSelect: "none",
+          minHeight: 20,
+        }}
+      >
+        <Typography
+          variant="body2"
+          sx={{ fontWeight: 500, color: "text.secondary", fontStyle: done ? "normal" : "italic", lineHeight: "20px" }}
+        >
+          {label}
+        </Typography>
+        {!done && <CircularProgress size={12} />}
+        {!expanded && preview && (
+          <Typography
+            variant="caption"
+            sx={{ opacity: 0.4, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}
+          >
+            {preview}
+          </Typography>
+        )}
+        {hasContent && (
+          <ExpandMoreIcon
+            sx={{
+              fontSize: 16,
+              transform: expanded ? "rotate(180deg)" : "none",
+              transition: "transform 0.2s",
+              opacity: 0.4,
+              ml: "auto",
+            }}
+          />
+        )}
+      </Box>
+      <Collapse in={expanded}>
+        <Box
+          sx={{
+            mt: 0.5,
+            pl: 1.25,
+            borderLeft: "2px solid",
+            borderColor: "divider",
+            opacity: 0.75,
+            ...markdownSx,
+            fontSize: "0.85rem",
+            "& p": { fontSize: "0.85rem", my: 0.5 },
+          }}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{think || previewSrc}</ReactMarkdown>
+        </Box>
+      </Collapse>
+      {body && (
+        <Box sx={{ mt: 0.75, ...markdownSx }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+        </Box>
+      )}
     </Box>
   );
 }
