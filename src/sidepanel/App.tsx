@@ -516,8 +516,8 @@ export default function App() {
           }
           if (seg.kind === "thinking") {
             return (
-              <Box key={seg.entry.id} sx={{ mb: 1, pl: 0.5 }}>
-                <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", opacity: 0.6, fontStyle: "italic", lineHeight: 1.6 }}>
+              <Box key={seg.entry.id} sx={{ mb: 1 }}>
+                <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                   {seg.entry.content}
                 </Typography>
               </Box>
@@ -743,17 +743,17 @@ function StepsGroup({
           userSelect: "none",
         }}
       >
+        <Typography variant="body2" sx={{ opacity: 0.5, fontWeight: 500 }}>
+          {stepCount} {stepCount === 1 ? "step" : "steps"}
+        </Typography>
         <ExpandMoreIcon
           sx={{
             fontSize: 16,
-            transform: expanded ? "rotate(0deg)" : "rotate(-90deg)",
+            transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
             transition: "transform 0.2s",
-            opacity: 0.5,
+            opacity: 0.4,
           }}
         />
-        <Typography variant="caption" sx={{ opacity: 0.5, fontWeight: 500 }}>
-          {stepCount} {stepCount === 1 ? "step" : "steps"}
-        </Typography>
       </Box>
 
       {/* 可折叠时间线 */}
