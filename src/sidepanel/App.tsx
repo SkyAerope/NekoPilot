@@ -85,17 +85,20 @@ interface LogEntry {
 
 let logIdCounter = 0;
 
-/** 将含 <think>...</think> 的原始内容拆为思考与正文 */
+/** 将含 <think>...</think> 的原始内容拆为思考与正文。
+ *  仅当存在闭合的 </think> 时才会拆出 body；否则全部视为思考中。 */
 function splitThinkText(raw: string): { think: string; body: string } {
   if (!raw) return { think: "", body: "" };
-  // 匹配第一个 <think>...</think> 段
-  const m = raw.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
-  if (!m) return { think: "", body: raw };
-  const think = m[1] ?? "";
-  const before = raw.slice(0, m.index!);
-  const after = raw.slice(m.index! + m[0].length);
-  const body = (before + after).trim();
-  return { think: think.trim(), body };
+  const closeIdx = raw.search(/<\/think>/i);
+  if (closeIdx === -1) {
+    // 还在思考中：剥掉可能的开头 <think> 前缀
+    return { think: raw.replace(/^\s*<think>/i, ""), body: "" };
+  }
+  const closeTag = raw.match(/<\/think>/i)![0];
+  const before = raw.slice(0, closeIdx);
+  const after = raw.slice(closeIdx + closeTag.length);
+  const think = before.replace(/^\s*<think>/i, "").trim();
+  return { think, body: after.trim() };
 }
 
 // ── 工具图标与标签 ──
@@ -1097,29 +1100,51 @@ function TimelineStep({
     );
 
   return (
-    <Box sx={{ display: "flex" }}>
+    <Box sx={{ display: "flex", alignItems: "stretch" }}>
       {/* 时间线列 */}
       <Box
         sx={{
           width: 24,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
           flexShrink: 0,
           position: "relative",
-          minHeight: 28,
         }}
       >
-        <Box sx={{ width: 1.5, height: "100%", bgcolor: showTopLine ? "divider" : "transparent", position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", bottom: "50%" }} />
-        <Box sx={{ width: 1.5, height: "100%", bgcolor: showBottomLine ? "divider" : "transparent", position: "absolute", top: "50%", left: "50%", transform: "translateX(-50%)" }} />
+        {/* 上半段线：从顶部到 icon 中心（10px） */}
         <Box
           sx={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: 0,
+            height: 10,
+            width: 1.5,
+            bgcolor: showTopLine ? "divider" : "transparent",
+          }}
+        />
+        {/* 下半段线：从 icon 中心到底部 */}
+        <Box
+          sx={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: 10,
+            bottom: 0,
+            width: 1.5,
+            bgcolor: showBottomLine ? "divider" : "transparent",
+          }}
+        />
+        {/* icon — 锚定顶部，与首行内容垂直居中（首行高约 20px） */}
+        <Box
+          sx={{
+            position: "absolute",
+            top: 0,
+            left: "50%",
+            transform: "translateX(-50%)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             width: 20,
             height: 20,
-            position: "relative",
             zIndex: 1,
             bgcolor: "background.default",
             borderRadius: "50%",
@@ -1130,7 +1155,7 @@ function TimelineStep({
       </Box>
 
       {/* 内容列 */}
-      <Box sx={{ flex: 1, minWidth: 0, pb: 1, pl: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <Box sx={{ flex: 1, minWidth: 0, pb: 1, pl: 1, minHeight: 20 }}>
         {entry.type === "tool_call" && (
           <ToolCallStep
             entry={entry}
@@ -1185,6 +1210,13 @@ function ThinkingStep({
     const firstLine = previewSrc.split("\n").find((l) => l.trim()) ?? "";
     return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
   }, [previewSrc]);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 流式中思考内容增长时，自动滚到底部
+  useEffect(() => {
+    if (!done && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [previewSrc, done]);
   const hasContent = !!(think || (!done && previewSrc));
 
   return (
@@ -1230,12 +1262,13 @@ function ThinkingStep({
       </Box>
       <Collapse in={expanded}>
         <Box
+          ref={scrollRef}
           sx={{
             mt: 0.5,
-            pl: 1.25,
-            borderLeft: "2px solid",
-            borderColor: "divider",
+            pl: 1,
             opacity: 0.75,
+            maxHeight: 200,
+            overflowY: "auto",
             ...markdownSx,
             fontSize: "0.85rem",
             "& p": { fontSize: "0.85rem", my: 0.5 },
