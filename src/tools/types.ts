@@ -34,3 +34,16 @@ export function toOpenAiFunction(tool: ToolDefinition) {
     },
   };
 }
+
+// Anthropic tool 格式
+export function toAnthropicTool(tool: ToolDefinition) {
+  return {
+    name: tool.name,
+    description: tool.description,
+    input_schema: {
+      type: "object" as const,
+      properties: tool.parameters,
+      required: tool.required ?? [],
+    },
+  };
+}

@@ -400,6 +400,7 @@ export default function App() {
       baseUrl?: string;
       model?: string;
       showClickMarker?: boolean;
+      provider?: string;
     }>("settings:get");
 
     if (!settings?.apiKey) {
@@ -421,6 +422,7 @@ export default function App() {
           maxIterations: 20,
           permissionMode: autoMode ? "auto" : "ask",
           showClickMarker: settings.showClickMarker !== false,
+          provider: settings.provider === "anthropic" ? "anthropic" : "openai",
         },
       });
     } catch (err) {
@@ -547,7 +549,7 @@ export default function App() {
       ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
       .join("\n") ?? "";
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean }>("settings:get");
+    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string }>("settings:get");
     if (!settings?.apiKey) {
       setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
       return;
@@ -563,6 +565,7 @@ export default function App() {
           maxIterations: 20,
           permissionMode: autoMode ? "auto" : "ask",
           showClickMarker: settings.showClickMarker !== false,
+          provider: settings.provider === "anthropic" ? "anthropic" : "openai",
         },
       });
     } catch (err) {

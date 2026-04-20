@@ -7,6 +7,7 @@ export interface AgentConfig {
   maxIterations: number;
   permissionMode: "ask" | "auto";
   showClickMarker: boolean;
+  provider: "openai" | "anthropic";
 }
 
 export type AgentEventType =

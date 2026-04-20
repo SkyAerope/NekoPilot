@@ -2,7 +2,7 @@
 
 import type { ToolExecutor } from "../tools/executor";
 import { toolDefinitions } from "../tools/definitions";
-import { toOpenAiFunction } from "../tools/types";
+import { toOpenAiFunction, toAnthropicTool } from "../tools/types";
 import type {
   AgentConfig,
   AgentEvent,
@@ -103,6 +103,13 @@ export class AgentLoop {
   }
 
   private async callLlm(): Promise<ChatMessage> {
+    if (this.config.provider === "anthropic") {
+      return this.callLlmAnthropic();
+    }
+    return this.callLlmOpenAI();
+  }
+
+  private async callLlmOpenAI(): Promise<ChatMessage> {
     const functions = toolDefinitions.map(toOpenAiFunction);
 
     const body = {
@@ -221,6 +228,235 @@ export class AgentLoop {
     } as ChatMessage;
   }
 
+  // ── Anthropic Messages API ──
+
+  /** 将内部 OpenAI 格式消息转为 Anthropic 格式 */
+  private convertMessagesForAnthropic(): { system: string; messages: unknown[] } {
+    let system = "";
+    const out: unknown[] = [];
+
+    for (let i = 0; i < this.messages.length; i++) {
+      const msg = this.messages[i];
+
+      if (msg.role === "system") {
+        system = typeof msg.content === "string" ? msg.content : "";
+        continue;
+      }
+
+      if (msg.role === "user") {
+        const content = msg.content;
+        if (typeof content === "string") {
+          this.appendAnthropicMessage(out, "user", [{ type: "text", text: content }]);
+        } else if (Array.isArray(content)) {
+          // 多模态 user 消息（含截图）
+          const blocks = content.map((part) => {
+            if (part.type === "text") return { type: "text", text: part.text };
+            if (part.type === "image_url") {
+              const url = part.image_url.url;
+              const m = url.match(/^data:(image\/\w+);base64,(.+)$/);
+              if (m) {
+                return { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } };
+              }
+            }
+            return { type: "text", text: "[unsupported content]" };
+          });
+          this.appendAnthropicMessage(out, "user", blocks);
+        }
+        continue;
+      }
+
+      if (msg.role === "assistant") {
+        const blocks: unknown[] = [];
+        if (msg.content) {
+          const text = typeof msg.content === "string" ? msg.content : "";
+          if (text) blocks.push({ type: "text", text });
+        }
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            let input: unknown;
+            try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
+            blocks.push({ type: "tool_use", id: tc.id, name: tc.function.name, input });
+          }
+        }
+        if (blocks.length > 0) {
+          this.appendAnthropicMessage(out, "assistant", blocks);
+        }
+        continue;
+      }
+
+      if (msg.role === "tool") {
+        // 收集连续的 tool 消息为一个 user 消息的 tool_result blocks
+        const toolBlocks: unknown[] = [];
+        let j = i;
+        while (j < this.messages.length && this.messages[j].role === "tool") {
+          const tm = this.messages[j];
+          const resultContent = typeof tm.content === "string" ? tm.content : JSON.stringify(tm.content);
+          // 检查下一条是否是 user 消息带截图（对应此 tool 的截图结果）
+          const next = this.messages[j + 1];
+          if (resultContent === "Screenshot captured successfully." && next?.role === "user" && Array.isArray(next.content)) {
+            // 将截图直接嵌入 tool_result
+            const imgParts = (next.content as Array<{ type: string; image_url?: { url: string }; text?: string }>);
+            const contentBlocks: unknown[] = [];
+            for (const p of imgParts) {
+              if (p.type === "image_url" && p.image_url) {
+                const m = p.image_url.url.match(/^data:(image\/\w+);base64,(.+)$/);
+                if (m) {
+                  contentBlocks.push({ type: "image", source: { type: "base64", media_type: m[1], data: m[2] } });
+                }
+              }
+            }
+            contentBlocks.push({ type: "text", text: "Screenshot captured successfully." });
+            toolBlocks.push({ type: "tool_result", tool_use_id: tm.tool_call_id, content: contentBlocks });
+            j += 2; // 跳过 tool + 截图 user 消息
+          } else {
+            toolBlocks.push({ type: "tool_result", tool_use_id: tm.tool_call_id, content: resultContent });
+            j++;
+          }
+        }
+        this.appendAnthropicMessage(out, "user", toolBlocks);
+        i = j - 1; // 外层 for 会 i++
+        continue;
+      }
+    }
+
+    return { system, messages: out };
+  }
+
+  /** 追加内容到 Anthropic 消息数组，合并连续同 role 消息 */
+  private appendAnthropicMessage(messages: unknown[], role: string, content: unknown[]): void {
+    const last = messages[messages.length - 1] as { role: string; content: unknown[] } | undefined;
+    if (last && last.role === role) {
+      last.content.push(...content);
+    } else {
+      messages.push({ role, content });
+    }
+  }
+
+  private async callLlmAnthropic(): Promise<ChatMessage> {
+    const tools = toolDefinitions.map(toAnthropicTool);
+    const { system, messages } = this.convertMessagesForAnthropic();
+
+    const body = {
+      model: this.config.model,
+      max_tokens: 4096,
+      system,
+      messages,
+      tools,
+      stream: true,
+    };
+
+    const resp = await fetch(`${this.config.baseUrl}/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.config.apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`LLM API error ${resp.status}: ${text}`);
+    }
+
+    // 解析 Anthropic SSE 流
+    let content = "";
+    const toolCalls: ToolCall[] = [];
+    let hasContent = false;
+    let messageStarted = false;
+    let thinkingStarted = false;
+
+    // 当前正在构建的 content block
+    let currentBlockType = "";
+    let currentToolId = "";
+    let currentToolName = "";
+    let currentToolArgs = "";
+
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop()!;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") continue;
+
+        let event;
+        try { event = JSON.parse(data); } catch { continue; }
+
+        if (event.type === "content_block_start") {
+          const block = event.content_block;
+          currentBlockType = block.type;
+          if (block.type === "tool_use") {
+            currentToolId = block.id;
+            currentToolName = block.name;
+            currentToolArgs = "";
+            // 如果已经有 content 且这是第一个 tool_use，通知 UI 切换
+            if (messageStarted && !thinkingStarted && content) {
+              this.emit({ type: "message_to_thinking", data: null });
+              thinkingStarted = true;
+            }
+          }
+          continue;
+        }
+
+        if (event.type === "content_block_delta") {
+          const delta = event.delta;
+          if (delta.type === "text_delta" && delta.text) {
+            content += delta.text;
+            hasContent = true;
+            // 判断是否有 tool_use（已经开始过），如果有则作为 thinking
+            if (toolCalls.length > 0 || currentBlockType === "text" && currentToolName) {
+              // 后续文本块视为 thinking（理论上 Anthropic 不会在 tool_use 后再有 text）
+              if (!thinkingStarted) {
+                this.emit({ type: "thinking", data: "" });
+                thinkingStarted = true;
+              }
+              this.emit({ type: "thinking_delta", data: delta.text });
+            } else {
+              if (!messageStarted) {
+                this.emit({ type: "message", data: "" });
+                messageStarted = true;
+              }
+              this.emit({ type: "message_delta", data: delta.text });
+            }
+          } else if (delta.type === "input_json_delta" && delta.partial_json) {
+            currentToolArgs += delta.partial_json;
+          }
+          continue;
+        }
+
+        if (event.type === "content_block_stop") {
+          if (currentBlockType === "tool_use") {
+            toolCalls.push({
+              id: currentToolId,
+              type: "function",
+              function: { name: currentToolName, arguments: currentToolArgs },
+            });
+          }
+          currentBlockType = "";
+          continue;
+        }
+      }
+    }
+
+    return {
+      role: "assistant",
+      content: hasContent ? content : null,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    } as ChatMessage;
+  }
+
   private static readonly READONLY_TOOLS = new Set([
     "screenshot", "read_page_text", "read_page", "read_page_interactive",
     "find_element", "get_element_text", "get_element_rect", "wait",
@@ -289,6 +525,7 @@ export class AgentLoop {
         tool_call_id: toolCall.id,
         content: "Screenshot captured successfully.",
       });
+      // 截图 user 消息延迟到所有 tool_result 之后，避免打断 tool_use → tool_result 序列
       deferredMessages.push({
         role: "user",
         content: [
