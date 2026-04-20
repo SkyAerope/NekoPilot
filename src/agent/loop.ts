@@ -471,20 +471,30 @@ export class AgentLoop {
       data: { name, args: argsStr, id: toolCall.id, needsPermission },
     });
 
-    // click 使用 selector 时，先检查元素是否存在，不存在直接拒绝
+    // click 使用 selector 时，先检查元素是否存在，不存在或选择器非法直接拒绝
     if (name === "click") {
-      try {
-        const args = JSON.parse(argsStr);
-        if (args.selector && typeof args.selector === "string") {
-          const exists = await this.tools.checkElement(args.selector);
-          if (!exists) {
-            const rejected = { success: false, error: `元素未找到: ${args.selector}` };
-            this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });
-            this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(rejected) });
-            return;
-          }
+      let parsedArgs: { selector?: unknown } | null = null;
+      try { parsedArgs = JSON.parse(argsStr); } catch { /* 解析失败交给后续 */ }
+      if (parsedArgs && typeof parsedArgs.selector === "string") {
+        const sel = parsedArgs.selector;
+        let exists = false;
+        let errMsg = "";
+        try {
+          exists = await this.tools.checkElement(sel);
+        } catch (err) {
+          // 选择器语法非法等：把错误暴露给模型，不进入审批
+          errMsg = String(err);
         }
-      } catch { /* 解析失败，交给后续执行处理 */ }
+        if (!exists) {
+          const rejected = {
+            success: false,
+            error: errMsg ? `选择器无效: ${sel} (${errMsg})` : `元素未找到: ${sel}`,
+          };
+          this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });
+          this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(rejected) });
+          return;
+        }
+      }
     }
 
     // 在 ask 模式下，仅对非只读工具等待用户确认
