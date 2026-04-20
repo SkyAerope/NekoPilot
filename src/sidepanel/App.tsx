@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Box,
   IconButton,
@@ -35,7 +35,6 @@ import CameraAltOutlinedIcon from "@mui/icons-material/CameraAltOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import TouchAppOutlinedIcon from "@mui/icons-material/TouchAppOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
-import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
@@ -119,22 +118,61 @@ function getToolLabel(name?: string): string {
   return labels[name ?? ""] ?? name ?? "Tool";
 }
 
-function getStepIcon(entry: LogEntry) {
-  switch (entry.type) {
-    case "user":
-      return null;
-    case "assistant":
-      return <FiberManualRecordIcon sx={{ fontSize: 8, color: "text.secondary", mt: 0.6 }} />;
-    case "thinking":
-      return <FiberManualRecordIcon sx={{ fontSize: 8, color: "text.disabled", mt: 0.6 }} />;
-    case "tool_call":
-      return <Box sx={{ color: "text.secondary", mt: 0.1 }}>{getToolIcon(entry.toolName)}</Box>;
-    case "error":
-      return <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main", mt: 0.1 }} />;
-    default:
-      return null;
+// ── 日志分段 ──
+
+type LogSegment =
+  | { kind: "user"; entry: LogEntry }
+  | { kind: "thinking"; entry: LogEntry }
+  | { kind: "assistant"; entry: LogEntry }
+  | { kind: "steps"; entries: LogEntry[] };
+
+function groupLogs(logs: LogEntry[]): LogSegment[] {
+  const segments: LogSegment[] = [];
+  let currentSteps: LogEntry[] = [];
+  const flushSteps = () => {
+    if (currentSteps.length > 0) {
+      segments.push({ kind: "steps", entries: [...currentSteps] });
+      currentSteps = [];
+    }
+  };
+  for (const entry of logs) {
+    if (entry.type === "user" || entry.type === "thinking" || entry.type === "assistant") {
+      flushSteps();
+      segments.push({ kind: entry.type, entry });
+    } else {
+      currentSteps.push(entry);
+    }
   }
+  flushSteps();
+  return segments;
 }
+
+const markdownSx = {
+  wordBreak: "break-word",
+  lineHeight: 1.6,
+  fontSize: "0.875rem",
+  "& p": { m: 0, mb: 1, "&:last-child": { mb: 0 } },
+  "& ul, & ol": { my: 0.5, pl: 2.5 },
+  "& li": { mb: 0.25 },
+  "& pre": {
+    bgcolor: "background.default",
+    borderRadius: 1,
+    p: 1.5,
+    overflow: "auto",
+    fontSize: "0.78rem",
+    my: 1,
+  },
+  "& code": { fontFamily: "monospace", fontSize: "0.82em" },
+  "& :not(pre) > code": { bgcolor: "action.selected", borderRadius: 0.5, px: 0.5, py: 0.15 },
+  "& blockquote": { borderLeft: 3, borderColor: "divider", pl: 1.5, ml: 0, my: 1, opacity: 0.8 },
+  "& table": { borderCollapse: "collapse", width: "100%", my: 1, fontSize: "0.8rem" },
+  "& th, & td": { border: 1, borderColor: "divider", px: 1, py: 0.5, textAlign: "left" },
+  "& th": { bgcolor: "action.hover", fontWeight: 600 },
+  "& h1, & h2, & h3, & h4": { mt: 1.5, mb: 0.5, fontSize: "0.95rem", fontWeight: 600 },
+  "& a": { color: "primary.main" },
+  "& hr": { borderColor: "divider", my: 1.5 },
+  "& img": { maxWidth: "100%", borderRadius: 1 },
+};
 
 // ── 主组件 ──
 
@@ -410,7 +448,32 @@ export default function App() {
     e.target.value = "";
   }, []);
 
-  const stepCount = logs.filter((l) => l.type !== "user").length;
+  const segments = useMemo(() => groupLogs(logs), [logs]);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(new Set());
+
+  // 自动展开/折叠 steps 分组
+  useEffect(() => {
+    if (logs.length === 0) return;
+    const last = logs[logs.length - 1];
+    if (last.type === "tool_call") {
+      let groupStart = logs.length - 1;
+      while (groupStart > 0 && (logs[groupStart - 1].type === "tool_call" || logs[groupStart - 1].type === "error")) {
+        groupStart--;
+      }
+      setExpandedGroupKeys((prev) => new Set([...prev, logs[groupStart].id]));
+    } else if (last.type === "assistant") {
+      setExpandedGroupKeys(new Set());
+    }
+  }, [logs]);
+
+  const toggleGroup = useCallback((key: number) => {
+    setExpandedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -439,24 +502,50 @@ export default function App() {
         </Toolbar>
       </AppBar>
 
-      {/* 步骤区 */}
+      {/* 对话区 */}
       <Box sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
-        {stepCount > 0 && (
-          <Typography variant="caption" sx={{ opacity: 0.5, mb: 1.5, display: "block" }}>
-            {stepCount} steps
-          </Typography>
-        )}
-        {logs.map((entry, i) => (
-          <StepItem
-            key={entry.id}
-            entry={entry}
-            showTopLine={i > 0 && entry.type !== "user" && logs[i - 1]?.type !== "user"}
-            showBottomLine={i < logs.length - 1 && entry.type !== "user" && logs[i + 1]?.type !== "user"}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            onDismiss={handleDismissLog}
-          />
-        ))}
+        {segments.map((seg) => {
+          if (seg.kind === "user") {
+            return (
+              <Box key={seg.entry.id} sx={{ mb: 2, mt: 1 }}>
+                <Paper sx={{ p: 1.5, bgcolor: "primary.dark", borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  <Typography variant="body2">{seg.entry.content}</Typography>
+                </Paper>
+              </Box>
+            );
+          }
+          if (seg.kind === "thinking") {
+            return (
+              <Box key={seg.entry.id} sx={{ mb: 1, pl: 0.5 }}>
+                <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", opacity: 0.6, fontStyle: "italic", lineHeight: 1.6 }}>
+                  {seg.entry.content}
+                </Typography>
+              </Box>
+            );
+          }
+          if (seg.kind === "assistant") {
+            return (
+              <Box key={seg.entry.id} sx={{ mb: 2, ...markdownSx }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
+              </Box>
+            );
+          }
+          if (seg.kind === "steps") {
+            const groupKey = seg.entries[0].id;
+            return (
+              <StepsGroup
+                key={groupKey}
+                entries={seg.entries}
+                expanded={expandedGroupKeys.has(groupKey)}
+                onToggle={() => toggleGroup(groupKey)}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                onDismiss={handleDismissLog}
+              />
+            );
+          }
+          return null;
+        })}
         <div ref={logsEndRef} />
       </Box>
 
@@ -620,7 +709,74 @@ export default function App() {
 
 // ── 步骤时间线组件 ──
 
-function StepItem({
+// ── Steps 可折叠分组 ──
+
+function StepsGroup({
+  entries,
+  expanded,
+  onToggle,
+  onApprove,
+  onReject,
+  onDismiss,
+}: {
+  entries: LogEntry[];
+  expanded: boolean;
+  onToggle: () => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  onDismiss: (id: number) => void;
+}) {
+  const stepCount = entries.filter((e) => e.type === "tool_call").length;
+
+  return (
+    <Box sx={{ mb: 1 }}>
+      {/* 可折叠标题 */}
+      <Box
+        onClick={onToggle}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.5,
+          cursor: "pointer",
+          py: 0.5,
+          "&:hover": { opacity: 0.8 },
+          userSelect: "none",
+        }}
+      >
+        <ExpandMoreIcon
+          sx={{
+            fontSize: 16,
+            transform: expanded ? "rotate(0deg)" : "rotate(-90deg)",
+            transition: "transform 0.2s",
+            opacity: 0.5,
+          }}
+        />
+        <Typography variant="caption" sx={{ opacity: 0.5, fontWeight: 500 }}>
+          {stepCount} {stepCount === 1 ? "step" : "steps"}
+        </Typography>
+      </Box>
+
+      {/* 可折叠时间线 */}
+      <Collapse in={expanded}>
+        {entries.map((entry, i) => (
+          <TimelineStep
+            key={entry.id}
+            entry={entry}
+            showTopLine={i > 0}
+            showBottomLine={i < entries.length - 1}
+            onApprove={onApprove}
+            onReject={onReject}
+            onDismiss={onDismiss}
+          />
+        ))}
+      </Collapse>
+    </Box>
+  );
+}
+
+// ── 时间线步骤 ──
+
+function TimelineStep({
   entry,
   showTopLine,
   showBottomLine,
@@ -637,111 +793,43 @@ function StepItem({
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  // 用户消息 — 独立块
-  if (entry.type === "user") {
-    return (
-      <Box sx={{ mb: 2, mt: 1 }}>
-        <Paper
-          sx={{
-            p: 1.5, bgcolor: "primary.dark", borderRadius: 2,
-            whiteSpace: "pre-wrap", wordBreak: "break-word",
-          }}
-        >
-          <Typography variant="body2">{entry.content}</Typography>
-        </Paper>
-      </Box>
+  const icon =
+    entry.type === "error" ? (
+      <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main" }} />
+    ) : (
+      <Box sx={{ color: "text.secondary", display: "flex" }}>{getToolIcon(entry.toolName)}</Box>
     );
-  }
-
-  // 其他类型 — 时间线
-  const icon = getStepIcon(entry);
 
   return (
     <Box sx={{ display: "flex" }}>
       {/* 时间线列 */}
       <Box
         sx={{
-          width: 24, display: "flex", flexDirection: "column",
-          alignItems: "center", flexShrink: 0,
+          width: 24,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          flexShrink: 0,
         }}
       >
         <Box sx={{ width: 1.5, height: 8, bgcolor: showTopLine ? "divider" : "transparent", flexShrink: 0 }} />
-        {icon}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 20,
+            height: 20,
+            flexShrink: 0,
+          }}
+        >
+          {icon}
+        </Box>
         <Box sx={{ width: 1.5, flex: 1, bgcolor: showBottomLine ? "divider" : "transparent" }} />
       </Box>
 
       {/* 内容列 */}
-      <Box sx={{ flex: 1, minWidth: 0, pb: 1.5, pl: 1 }}>
-        {entry.type === "assistant" && (
-          <Box
-            sx={{
-              wordBreak: "break-word",
-              lineHeight: 1.6,
-              fontSize: "0.875rem",
-              "& p": { m: 0, mb: 1, "&:last-child": { mb: 0 } },
-              "& ul, & ol": { my: 0.5, pl: 2.5 },
-              "& li": { mb: 0.25 },
-              "& pre": {
-                bgcolor: "background.default",
-                borderRadius: 1,
-                p: 1.5,
-                overflow: "auto",
-                fontSize: "0.78rem",
-                my: 1,
-              },
-              "& code": {
-                fontFamily: "monospace",
-                fontSize: "0.82em",
-              },
-              "& :not(pre) > code": {
-                bgcolor: "action.selected",
-                borderRadius: 0.5,
-                px: 0.5,
-                py: 0.15,
-              },
-              "& blockquote": {
-                borderLeft: 3,
-                borderColor: "divider",
-                pl: 1.5,
-                ml: 0,
-                my: 1,
-                opacity: 0.8,
-              },
-              "& table": {
-                borderCollapse: "collapse",
-                width: "100%",
-                my: 1,
-                fontSize: "0.8rem",
-              },
-              "& th, & td": {
-                border: 1,
-                borderColor: "divider",
-                px: 1,
-                py: 0.5,
-                textAlign: "left",
-              },
-              "& th": { bgcolor: "action.hover", fontWeight: 600 },
-              "& h1, & h2, & h3, & h4": {
-                mt: 1.5,
-                mb: 0.5,
-                fontSize: "0.95rem",
-                fontWeight: 600,
-              },
-              "& a": { color: "primary.main" },
-              "& hr": { borderColor: "divider", my: 1.5 },
-              "& img": { maxWidth: "100%", borderRadius: 1 },
-            }}
-          >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content}</ReactMarkdown>
-          </Box>
-        )}
-
-        {entry.type === "thinking" && (
-          <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", opacity: 0.6, fontStyle: "italic", lineHeight: 1.6 }}>
-            {entry.content}
-          </Typography>
-        )}
-
+      <Box sx={{ flex: 1, minWidth: 0, pb: 1, pl: 1 }}>
         {entry.type === "tool_call" && (
           <ToolCallStep
             entry={entry}

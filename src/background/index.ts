@@ -58,9 +58,9 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         config: AgentConfig;
       };
       const tab = await getActiveTab();
-      if (!cdp.isAttached) {
-        await cdp.attach(tab.id!);
-      }
+      // 始终重连到当前活动标签页
+      try { await cdp.detach(); } catch { /* 未连接时忽略 */ }
+      await cdp.attach(tab.id!);
       conversationHistory.push({ role: "user", content: userMessage });
       agentLoop = new AgentLoop(tools, config, (event) => {
         chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
@@ -106,8 +106,9 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
 
     // ── 元素选择器 ──
     case "pick:start": {
-      // 始终连接当前活动标签页
+      // 始终重连到当前活动标签页
       const tab = await getActiveTab();
+      try { await cdp.detach(); } catch { /* 忽略 */ }
       await cdp.attach(tab.id!);
       // 注入元素选择器到页面
       const pickScript = `

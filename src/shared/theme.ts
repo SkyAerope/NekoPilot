@@ -31,8 +31,8 @@ export function buildTheme(paletteMode: PaletteMode) {
           }
         : {
             mode: "light",
-            primary: { main: "#7c3aed" },
-            secondary: { main: "#ec4899" },
+            primary: { main: "#e1c2a6" },
+            secondary: { main: "#f6e3c5" },
           },
   });
 }
