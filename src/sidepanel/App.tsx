@@ -38,6 +38,9 @@ import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import EditIcon from "@mui/icons-material/Edit";
+import ReplayIcon from "@mui/icons-material/Replay";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { sendMessage } from "../shared/messaging";
@@ -474,6 +477,68 @@ export default function App() {
     setLogs((prev) => prev.filter((l) => l.id !== logId));
   }, []);
 
+  const handleCopyText = useCallback((text: string) => {
+    navigator.clipboard.writeText(text);
+  }, []);
+
+  const handleEditMessage = useCallback(async (entryId: number) => {
+    if (running) return;
+    const entry = logs.find((l) => l.id === entryId);
+    if (!entry || entry.type !== "user") return;
+    const text = entry.content.replace(/\n\[附件:.*?\]$/s, "");
+    setInput(text);
+    if (entry.pickedElements) setPickedElements([...entry.pickedElements]);
+    await sendMessage("agent:reset");
+    setLogs((prev) => {
+      const idx = prev.findIndex((l) => l.id === entryId);
+      return idx >= 0 ? prev.slice(0, idx) : prev;
+    });
+  }, [logs, running]);
+
+  const handleRetry = useCallback(async (entryId: number, isUser: boolean) => {
+    if (running) return;
+    const idx = logs.findIndex((l) => l.id === entryId);
+    if (idx < 0) return;
+    let userEntry: LogEntry | undefined;
+    if (isUser) {
+      userEntry = logs[idx];
+    } else {
+      for (let i = idx - 1; i >= 0; i--) {
+        if (logs[i].type === "user") { userEntry = logs[i]; break; }
+      }
+    }
+    if (!userEntry) return;
+    await sendMessage("agent:reset");
+    const newEntry = { ...userEntry, id: ++logIdCounter, timestamp: Date.now() };
+    setLogs([newEntry]);
+    const text = userEntry.content.replace(/\n\[附件:.*?\]$/s, "");
+    const elementContext = userEntry.pickedElements
+      ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
+      .join("\n") ?? "";
+    const fullMessage = [text, elementContext].filter(Boolean).join("\n");
+    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string }>("settings:get");
+    if (!settings?.apiKey) {
+      setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
+      return;
+    }
+    setRunning(true);
+    try {
+      await sendMessage("agent:start", {
+        userMessage: fullMessage,
+        config: {
+          apiKey: settings.apiKey,
+          baseUrl: settings.baseUrl || "https://api.openai.com/v1",
+          model: settings.model || "gpt-4o",
+          maxIterations: 20,
+          permissionMode: autoMode ? "auto" : "ask",
+        },
+      });
+    } catch (err) {
+      setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: String(err), timestamp: Date.now() }]);
+      setRunning(false);
+    }
+  }, [logs, running, autoMode]);
+
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -547,7 +612,7 @@ export default function App() {
         {segments.map((seg) => {
           if (seg.kind === "user") {
             return (
-              <Box key={seg.entry.id} sx={{ mb: 2, mt: 1 }}>
+              <Box key={seg.entry.id} sx={{ mb: 2, mt: 1, "&:hover .hover-actions": { opacity: 1 } }}>
                 <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   <Typography variant="body2">{seg.entry.content}</Typography>
                   {seg.entry.pickedElements && seg.entry.pickedElements.length > 0 && (
@@ -566,35 +631,53 @@ export default function App() {
                     </Box>
                   )}
                 </Paper>
+                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25, mt: 0.25 }}>
+                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entry.content)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="编辑"><IconButton size="small" onClick={() => handleEditMessage(seg.entry.id)} disabled={running} sx={{ p: 0.25 }}><EditIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entry.id, true)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                </Stack>
               </Box>
             );
           }
           if (seg.kind === "thinking") {
             return (
-              <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
+              <Box key={seg.entry.id} sx={{ mb: 1, "&:hover .hover-actions": { opacity: 1 }, ...markdownSx }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
+                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25, mt: 0.25 }}>
+                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entry.content)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entry.id, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                </Stack>
               </Box>
             );
           }
           if (seg.kind === "assistant") {
             return (
-              <Box key={seg.entry.id} sx={{ mb: 2, ...markdownSx }}>
+              <Box key={seg.entry.id} sx={{ mb: 2, "&:hover .hover-actions": { opacity: 1 }, ...markdownSx }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
+                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25, mt: 0.25 }}>
+                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entry.content)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entry.id, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                </Stack>
               </Box>
             );
           }
           if (seg.kind === "steps") {
             const groupKey = seg.entries[0].id;
             return (
-              <StepsGroup
-                key={groupKey}
-                entries={seg.entries}
-                expanded={expandedGroupKeys.has(groupKey)}
-                onToggle={() => toggleGroup(groupKey)}
-                onApprove={handleApprove}
-                onReject={handleReject}
-                onDismiss={handleDismissLog}
-              />
+              <Box key={groupKey} sx={{ "&:hover > .hover-actions": { opacity: 1 } }}>
+                <StepsGroup
+                  entries={seg.entries}
+                  expanded={expandedGroupKeys.has(groupKey)}
+                  onToggle={() => toggleGroup(groupKey)}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                  onDismiss={handleDismissLog}
+                />
+                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25 }}>
+                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entries.filter((e) => e.type === "tool_call").map((e) => `${getToolLabel(e.toolName)}: ${e.toolResult ?? "..."}`).join("\n"))} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entries[0].id, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                </Stack>
+              </Box>
             );
           }
           return null;
