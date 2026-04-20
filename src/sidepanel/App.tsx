@@ -31,6 +31,21 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
 
+interface PickedElement {
+  id: number;
+  tag: string;
+  selector: string;
+  text: string;
+}
+
+interface Attachment {
+  id: number;
+  name: string;
+  type: string;
+  size: number;
+  file: File;
+}
+
 interface LogEntry {
   id: number;
   type: "user" | "assistant" | "thinking" | "tool_call" | "tool_result" | "error";
@@ -48,7 +63,10 @@ export default function App() {
   const [autoMode, setAutoMode] = useState(true);
   const [modeMenuAnchor, setModeMenuAnchor] = useState<null | HTMLElement>(null);
   const [picking, setPicking] = useState(false);
+  const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 监听 agent 事件
   useEffect(() => {
@@ -101,13 +119,22 @@ export default function App() {
     const text = input.trim();
     if (!text || running) return;
 
+    // 收集附加上下文
+    const elementContext = pickedElements
+      .map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}"]`)
+      .join("\n");
+    const attachmentNames = attachments.map((a) => a.name);
+    const fullMessage = [text, elementContext].filter(Boolean).join("\n");
+
     setInput("");
+    setPickedElements([]);
+    setAttachments([]);
     setLogs((prev) => [
       ...prev,
       {
         id: ++logIdCounter,
         type: "user",
-        content: text,
+        content: fullMessage + (attachmentNames.length ? `\n[附件: ${attachmentNames.join(", ")}]` : ""),
         timestamp: Date.now(),
       },
     ]);
@@ -135,7 +162,7 @@ export default function App() {
     setRunning(true);
     try {
       await sendMessage("agent:start", {
-        userMessage: text,
+        userMessage: fullMessage,
         config: {
           apiKey: settings.apiKey,
           baseUrl: settings.baseUrl || "https://api.openai.com/v1",
@@ -156,7 +183,7 @@ export default function App() {
       ]);
       setRunning(false);
     }
-  }, [input, running, autoMode]);
+  }, [input, running, autoMode, pickedElements, attachments]);
 
   const handleStop = useCallback(async () => {
     await sendMessage("agent:stop");
@@ -184,8 +211,15 @@ export default function App() {
       const result = await sendMessage<{ element: Record<string, unknown> | null; timeout?: boolean }>("pick:start");
       if (result.element) {
         const el = result.element;
-        const desc = `[元素: <${el.tag}> selector="${el.selector}" text="${(el.text as string || "").slice(0, 60)}" rect=${JSON.stringify(el.rect)}]`;
-        setInput((prev) => prev + (prev ? "\n" : "") + desc);
+        setPickedElements((prev) => [
+          ...prev,
+          {
+            id: ++logIdCounter,
+            tag: String(el.tag),
+            selector: String(el.selector),
+            text: String(el.text || "").slice(0, 40),
+          },
+        ]);
       }
     } catch (err) {
       setLogs((prev) => [
@@ -196,6 +230,20 @@ export default function App() {
       setPicking(false);
     }
   }, [picking]);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const newAttachments: Attachment[] = Array.from(files).map((f) => ({
+      id: ++logIdCounter,
+      name: f.name,
+      type: f.type,
+      size: f.size,
+      file: f,
+    }));
+    setAttachments((prev) => [...prev, ...newAttachments]);
+    e.target.value = "";
+  }, []);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -248,6 +296,36 @@ export default function App() {
             overflow: "hidden",
           }}
         >
+          {/* 附加 Chip 区域 */}
+          {(pickedElements.length > 0 || attachments.length > 0) && (
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, px: 1.5, pt: 1, pb: 0 }}>
+              {pickedElements.map((el) => (
+                <Chip
+                  key={`el-${el.id}`}
+                  label={`<${el.tag}> ${el.text || el.selector}`}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
+                  onDelete={() => setPickedElements((prev) => prev.filter((e) => e.id !== el.id))}
+                  sx={{ maxWidth: 200, fontSize: "0.75rem" }}
+                />
+              ))}
+              {attachments.map((att) => (
+                <Chip
+                  key={`att-${att.id}`}
+                  label={att.name}
+                  size="small"
+                  color="secondary"
+                  variant="outlined"
+                  icon={<AttachFileIcon sx={{ fontSize: "14px !important" }} />}
+                  onDelete={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                  sx={{ maxWidth: 200, fontSize: "0.75rem" }}
+                />
+              ))}
+            </Box>
+          )}
+
           {/* 输入区域 */}
           <InputBase
             fullWidth
@@ -260,7 +338,7 @@ export default function App() {
             disabled={running}
             sx={{
               px: 2,
-              pt: 1.5,
+              pt: pickedElements.length > 0 || attachments.length > 0 ? 0.5 : 1.5,
               pb: 0.5,
               fontSize: "0.9rem",
             }}
@@ -342,7 +420,14 @@ export default function App() {
             <Tooltip title="添加附件">
               <IconButton size="small" component="label">
                 <AttachFileIcon sx={{ fontSize: 18 }} />
-                <input type="file" hidden accept="image/*,.pdf,.txt,.json,.csv" multiple />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  hidden
+                  accept="image/*,.pdf,.txt,.json,.csv"
+                  multiple
+                  onChange={handleFileChange}
+                />
               </IconButton>
             </Tooltip>
             {running ? (
@@ -356,7 +441,7 @@ export default function App() {
                 <IconButton
                   size="small"
                   onClick={handleSend}
-                  disabled={!input.trim()}
+                  disabled={!input.trim() && pickedElements.length === 0}
                   color="primary"
                 >
                   <SendIcon sx={{ fontSize: 18 }} />
