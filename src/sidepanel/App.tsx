@@ -16,6 +16,7 @@ import {
   ListItemIcon,
   ListItemText,
 } from "@mui/material";
+import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LinkIcon from "@mui/icons-material/Link";
@@ -46,6 +47,7 @@ export default function App() {
   const [attached, setAttached] = useState(false);
   const [autoMode, setAutoMode] = useState(true);
   const [modeMenuAnchor, setModeMenuAnchor] = useState<null | HTMLElement>(null);
+  const [picking, setPicking] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // 监听 agent 事件
@@ -175,6 +177,26 @@ export default function App() {
     setLogs([]);
   }, []);
 
+  const handlePickElement = useCallback(async () => {
+    if (picking) return;
+    setPicking(true);
+    try {
+      const result = await sendMessage<{ element: Record<string, unknown> | null; timeout?: boolean }>("pick:start");
+      if (result.element) {
+        const el = result.element;
+        const desc = `[元素: <${el.tag}> selector="${el.selector}" text="${(el.text as string || "").slice(0, 60)}" rect=${JSON.stringify(el.rect)}]`;
+        setInput((prev) => prev + (prev ? "\n" : "") + desc);
+      }
+    } catch (err) {
+      setLogs((prev) => [
+        ...prev,
+        { id: ++logIdCounter, type: "error", content: "选择元素失败: " + String(err), timestamp: Date.now() },
+      ]);
+    } finally {
+      setPicking(false);
+    }
+  }, [picking]);
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* 顶栏 */}
@@ -302,8 +324,13 @@ export default function App() {
             <Box sx={{ flexGrow: 1 }} />
 
             {/* 右侧操作按钮 */}
-            <Tooltip title="指定页面元素">
-              <IconButton size="small">
+            <Tooltip title={picking ? "正在选择..." : "指定页面元素"}>
+              <IconButton
+                size="small"
+                onClick={handlePickElement}
+                disabled={picking}
+                color={picking ? "primary" : "default"}
+              >
                 <NearMeIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Tooltip>
@@ -320,9 +347,14 @@ export default function App() {
                 </IconButton>
               </Tooltip>
             ) : (
-              <Tooltip title="停止">
-                <IconButton size="small" disabled>
-                  <StopIcon sx={{ fontSize: 18 }} />
+              <Tooltip title="发送消息">
+                <IconButton
+                  size="small"
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  color="primary"
+                >
+                  <SendIcon sx={{ fontSize: 18 }} />
                 </IconButton>
               </Tooltip>
             )}
