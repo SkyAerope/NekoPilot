@@ -179,11 +179,16 @@ export class AgentLoop {
 
     // 将结果加入消息历史
     if (name === "screenshot" && result.success) {
+      // tool 消息只能是字符串，图片需通过 user 消息传入
       this.messages.push({
         role: "tool",
         tool_call_id: toolCall.id,
+        content: "Screenshot captured successfully.",
+      });
+      this.messages.push({
+        role: "user",
         content: [
-          { type: "text", text: "Screenshot captured:" },
+          { type: "text", text: "[screenshot result]" },
           { type: "image_url", image_url: { url: `data:image/png;base64,${result.data}` } },
         ],
       });
