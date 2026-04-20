@@ -25,9 +25,9 @@ import SmartToyIcon from "@mui/icons-material/SmartToy";
 import NearMeIcon from "@mui/icons-material/NearMe";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import AddCommentIcon from "@mui/icons-material/AddComment";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import DoubleArrowIcon from "@mui/icons-material/DoubleArrow";
+import PanToolAltIcon from "@mui/icons-material/PanToolAlt";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
-import CheckIcon from "@mui/icons-material/Check";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
 
@@ -287,7 +287,9 @@ export default function App() {
                 userSelect: "none",
               }}
             >
-              <PlayArrowIcon sx={{ fontSize: 16, opacity: 0.7 }} />
+              {autoMode
+                ? <DoubleArrowIcon sx={{ fontSize: 16, opacity: 0.7 }} />
+                : <PanToolAltIcon sx={{ fontSize: 16, opacity: 0.7 }} />}
               <Typography variant="caption" sx={{ opacity: 0.8 }}>
                 {autoMode ? "Act without asking" : "Ask before acting"}
               </Typography>
@@ -300,24 +302,27 @@ export default function App() {
               onClose={() => setModeMenuAnchor(null)}
               anchorOrigin={{ vertical: "top", horizontal: "left" }}
               transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+              slotProps={{ paper: { sx: { minWidth: 0 } }, list: { dense: true } }}
             >
               <MenuItem
                 onClick={() => { setAutoMode(true); setModeMenuAnchor(null); }}
                 selected={autoMode}
+                sx={{ py: 0.5 }}
               >
-                <ListItemIcon>
-                  {autoMode && <CheckIcon fontSize="small" />}
+                <ListItemIcon sx={{ minWidth: 28 }}>
+                  <DoubleArrowIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText>Act without asking</ListItemText>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }}>Act without asking</ListItemText>
               </MenuItem>
               <MenuItem
                 onClick={() => { setAutoMode(false); setModeMenuAnchor(null); }}
                 selected={!autoMode}
+                sx={{ py: 0.5 }}
               >
-                <ListItemIcon>
-                  {!autoMode && <CheckIcon fontSize="small" />}
+                <ListItemIcon sx={{ minWidth: 28 }}>
+                  <PanToolAltIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText>Ask before acting</ListItemText>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }}>Ask before acting</ListItemText>
               </MenuItem>
             </Menu>
 
