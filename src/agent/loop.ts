@@ -489,16 +489,27 @@ export class AgentLoop {
 
     // 在 ask 模式下，仅对非只读工具等待用户确认
     if (needsPermission) {
-      // click 工具显示坐标标记
+      // click / scroll 工具显示位置标记
       let showedMarker = false;
-      if (name === "click" && this.config.showClickMarker) {
+      if (this.config.showClickMarker) {
         try {
           const args = JSON.parse(argsStr);
-          const x = args.x as number | undefined;
-          const y = args.y as number | undefined;
-          if (x !== undefined && y !== undefined) {
-            await this.tools.showClickMarker(x, y);
-            showedMarker = true;
+          if (name === "click") {
+            const x = args.x as number | undefined;
+            const y = args.y as number | undefined;
+            if (x !== undefined && y !== undefined) {
+              await this.tools.showClickMarker(x, y);
+              showedMarker = true;
+            }
+          } else if (name === "scroll") {
+            const x = args.x as number | undefined;
+            const y = args.y as number | undefined;
+            const dx = (args.deltaX as number | undefined) ?? 0;
+            const dy = (args.deltaY as number | undefined) ?? 0;
+            if (x !== undefined && y !== undefined) {
+              await this.tools.showScrollMarker(x, y, dx, dy);
+              showedMarker = true;
+            }
           }
         } catch { /* 解析失败忽略 */ }
       }

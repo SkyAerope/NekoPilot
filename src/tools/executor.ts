@@ -137,6 +137,39 @@ export class ToolExecutor {
     });
   }
 
+  /** 显示 scroll 位置标记（带方向箭头） */
+  async showScrollMarker(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+    // 计算箭头方向：以最大分量为准；若两轴均为 0 则按向下处理
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    let arrow = "↓";
+    if (absX > absY) arrow = deltaX > 0 ? "→" : "←";
+    else if (absY > 0) arrow = deltaY > 0 ? "↓" : "↑";
+    const expression = `
+      (function() {
+        let m = document.getElementById('__nekopilot-click-marker');
+        if (m) m.remove();
+        m = document.createElement('div');
+        m.id = '__nekopilot-click-marker';
+        m.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+          + 'left:' + (${x} - 18) + 'px;top:' + (${y} - 18) + 'px;'
+          + 'width:36px;height:36px;border-radius:50%;'
+          + 'border:2px solid #3b82f6;background:rgba(59,130,246,0.18);'
+          + 'box-shadow:0 0 0 4px rgba(59,130,246,0.1);'
+          + 'display:flex;align-items:center;justify-content:center;'
+          + 'font:bold 20px/1 system-ui,sans-serif;color:#3b82f6;'
+          + 'animation:__neko-scroll-pulse 1s ease-in-out infinite;';
+        const style = document.createElement('style');
+        style.id = '__nekopilot-click-marker-style';
+        style.textContent = '@keyframes __neko-scroll-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.15);opacity:0.7}}';
+        document.head.appendChild(style);
+        m.textContent = ${JSON.stringify(arrow)};
+        document.body.appendChild(m);
+      })()
+    `;
+    await this.cdp.send("Runtime.evaluate", { expression });
+  }
+
   // ── 具体 Tool 实现 ──
 
   private async screenshot(): Promise<string> {
