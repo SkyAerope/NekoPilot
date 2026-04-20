@@ -152,10 +152,10 @@ export class ToolExecutor {
       (function() {
         const full = document.body.innerText;
         const text = full.slice(${offset}, ${offset} + ${limit});
-        return 'text: |\n  ' + text.replace(/\n/g, '\n  ')
-          + '\ntotalLength: ' + full.length
-          + '\noffset: ' + ${offset}
-          + '\nlimit: ' + ${limit};
+        return 'text: |\\n  ' + text.replace(/\\n/g, '\\n  ')
+          + '\\ntotalLength: ' + full.length
+          + '\\noffset: ' + ${offset}
+          + '\\nlimit: ' + ${limit};
       })()
     `;
     return this.evaluate(expression);
@@ -186,17 +186,17 @@ export class ToolExecutor {
           const pad = '  '.repeat(indent);
           if (Array.isArray(obj)) {
             if (obj.length === 0) return '[]';
-            return obj.map(item => pad + '- ' + toYaml(item, indent + 1).trimStart()).join('\n');
+            return obj.map(item => pad + '- ' + toYaml(item, indent + 1).trimStart()).join('\\n');
           }
           if (typeof obj === 'object') {
             const entries = Object.entries(obj).filter(([,v]) => v !== undefined && v !== '');
             if (entries.length === 0) return '{}';
             return entries.map(([k, v]) => {
               if (typeof v === 'object' && v !== null) {
-                return pad + k + ':\n' + toYaml(v, indent + 1);
+                return pad + k + ':\\n' + toYaml(v, indent + 1);
               }
               return pad + k + ': ' + v;
-            }).join('\n');
+            }).join('\\n');
           }
           return String(obj);
         }
@@ -233,7 +233,7 @@ export class ToolExecutor {
           } catch(e) { /* 跳过异常元素 */ }
         });
         if (lines.length === 0) return 'no_results: 当前页面没有可见的可交互元素';
-        return lines.join('\n');
+        return lines.join('\\n');
       })()
     `;
     return this.evaluate(expression);
@@ -389,7 +389,7 @@ export class ToolExecutor {
         }
 
         if (results.length === 0) return 'no_results: 未找到包含 "' + ${JSON.stringify(text)} + '" 的可见元素';
-        return results.map(r => '- tag: ' + r.tag + '\n  text: ' + r.text + '\n  selector: ' + r.selector + '\n  rect: ' + r.rect.x + ',' + r.rect.y + ',' + r.rect.w + 'x' + r.rect.h).join('\n');
+        return results.map(r => '- tag: ' + r.tag + '\\n  text: ' + r.text + '\\n  selector: ' + r.selector + '\\n  rect: ' + r.rect.x + ',' + r.rect.y + ',' + r.rect.w + 'x' + r.rect.h).join('\\n');
       })()
     `;
     return this.evaluate(expression);
@@ -406,10 +406,10 @@ export class ToolExecutor {
         if (!el) return 'error: Element not found';
         const full = (el.textContent || '').trim();
         const text = full.slice(${offset}, ${offset} + ${limit});
-        return 'text: |\n  ' + text.replace(/\n/g, '\n  ')
-          + '\ntotalLength: ' + full.length
-          + '\noffset: ' + ${offset}
-          + '\nlimit: ' + ${limit};
+        return 'text: |\\n  ' + text.replace(/\\n/g, '\\n  ')
+          + '\\ntotalLength: ' + full.length
+          + '\\noffset: ' + ${offset}
+          + '\\nlimit: ' + ${limit};
       })()
     `;
     return this.evaluate(expression);
