@@ -26,7 +26,10 @@ export class ToolExecutor {
       case "screenshot":
         return this.screenshot();
       case "read_page_text":
-        return this.readPageText();
+        return this.readPageText(
+          (params.limit as number) ?? 4096,
+          (params.offset as number) ?? 0
+        );
       case "read_page":
         return this.readPage();
       case "read_page_interactive":
@@ -60,7 +63,8 @@ export class ToolExecutor {
       case "find_element":
         return this.findElement(
           params.text as string,
-          (params.limit as number) ?? 10
+          (params.limit as number) ?? 10,
+          (params.tagFilter as string) ?? ""
         );
       case "get_element_text":
         return this.getElementText(
@@ -85,10 +89,21 @@ export class ToolExecutor {
     return result.data; // base64
   }
 
-  private async readPageText(): Promise<string> {
+  private async readPageText(limit: number, offset: number): Promise<string> {
+    const expression = `
+      (function() {
+        const full = document.body.innerText;
+        return JSON.stringify({
+          text: full.slice(${offset}, ${offset} + ${limit}),
+          totalLength: full.length,
+          offset: ${offset},
+          limit: ${limit},
+        });
+      })()
+    `;
     const result = await this.cdp.send<{ result: { value: string } }>(
       "Runtime.evaluate",
-      { expression: "document.body.innerText", returnByValue: true }
+      { expression, returnByValue: true }
     );
     return result.result.value;
   }
@@ -240,12 +255,14 @@ export class ToolExecutor {
 
   private async findElement(
     text: string,
-    limit: number
+    limit: number,
+    tagFilter: string
   ): Promise<string> {
     const expression = `
       (function() {
         const text = ${JSON.stringify(text)}.toLowerCase();
         const limit = ${limit};
+        const tagFilter = ${JSON.stringify(tagFilter)}.toLowerCase();
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         const seen = new Set();
         const results = [];
@@ -255,6 +272,7 @@ export class ToolExecutor {
           const el = node.parentElement;
           if (!el || seen.has(el)) continue;
           seen.add(el);
+          if (tagFilter && el.tagName.toLowerCase() !== tagFilter) continue;
           const rect = el.getBoundingClientRect();
           if (rect.width === 0 && rect.height === 0) continue;
           let selector = el.tagName.toLowerCase();

@@ -12,8 +12,17 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "read_page_text",
     description:
-      "读取当前页面的纯文本内容（document.body.innerText）。",
-    parameters: {},
+      "读取当前页面的纯文本内容（document.body.innerText）。可通过 limit 和 offset 控制返回范围。",
+    parameters: {
+      limit: {
+        type: "integer",
+        description: "返回文本的最大字符数，默认 4096",
+      },
+      offset: {
+        type: "integer",
+        description: "文本起始偏移量（字符数），默认 0",
+      },
+    },
   },
   {
     name: "read_page",
@@ -102,6 +111,10 @@ export const toolDefinitions: ToolDefinition[] = [
       limit: {
         type: "integer",
         description: "最多返回的匹配结果数，默认 10",
+      },
+      tagFilter: {
+        type: "string",
+        description: "可选的元素类型过滤（如 'a'、'button'、'div' 等），仅返回匹配该标签的元素",
       },
     },
     required: ["text"],
