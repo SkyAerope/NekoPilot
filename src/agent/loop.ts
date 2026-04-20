@@ -201,10 +201,8 @@ export class AgentLoop {
     let content = "";
     const toolCallsMap = new Map<number, { id: string; type: "function"; function: { name: string; arguments: string } }>();
     let hasContent = false;
-    let hasToolCalls = false;
     // 追踪是否已经发过起始事件
     let messageStarted = false;
-    let thinkingStarted = false;
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
@@ -234,26 +232,17 @@ export class AgentLoop {
         const delta = chunk.choices?.[0]?.delta;
         if (!delta) continue;
 
-        // 累积 content
+        // 累积 content — 统一以 message 流式发送。
+        // 前端会检测到 <think> 标签后把该条目转为 thinking；无标签则视为普通 assistant 正文。
         if (delta.content) {
           content += delta.content;
           hasContent = true;
 
-          // 在流式过程中还不知道最终有没有 tool_calls
-          // 先以 message_delta 发送，如果后续发现有 tool_calls 再切换
-          if (!hasToolCalls) {
-            if (!messageStarted) {
-              this.emit({ type: "message", data: "" });
-              messageStarted = true;
-            }
-            this.emit({ type: "message_delta", data: delta.content });
-          } else {
-            if (!thinkingStarted) {
-              this.emit({ type: "thinking", data: "" });
-              thinkingStarted = true;
-            }
-            this.emit({ type: "thinking_delta", data: delta.content });
+          if (!messageStarted) {
+            this.emit({ type: "message", data: "" });
+            messageStarted = true;
           }
+          this.emit({ type: "message_delta", data: delta.content });
         }
 
         // 累积 tool_calls
@@ -261,13 +250,6 @@ export class AgentLoop {
           for (const tc of delta.tool_calls) {
             const idx = tc.index ?? 0;
             if (!toolCallsMap.has(idx)) {
-              hasToolCalls = true;
-              // 第一次出现 tool_call，如果之前以 message 发过 content，需要通知 UI 切换为 thinking
-              if (messageStarted && !thinkingStarted && content) {
-                // 替换：之前的 message 其实是 thinking
-                this.emit({ type: "message_to_thinking", data: null });
-                thinkingStarted = true;
-              }
               toolCallsMap.set(idx, {
                 id: tc.id ?? "",
                 type: "function",
@@ -430,7 +412,6 @@ export class AgentLoop {
     const toolCalls: ToolCall[] = [];
     let hasContent = false;
     let messageStarted = false;
-    let thinkingStarted = false;
 
     // 当前正在构建的 content block
     let currentBlockType = "";
@@ -466,11 +447,6 @@ export class AgentLoop {
             currentToolId = block.id;
             currentToolName = block.name;
             currentToolArgs = "";
-            // 如果已经有 content 且这是第一个 tool_use，通知 UI 切换
-            if (messageStarted && !thinkingStarted && content) {
-              this.emit({ type: "message_to_thinking", data: null });
-              thinkingStarted = true;
-            }
           }
           continue;
         }
@@ -480,21 +456,12 @@ export class AgentLoop {
           if (delta.type === "text_delta" && delta.text) {
             content += delta.text;
             hasContent = true;
-            // 判断是否有 tool_use（已经开始过），如果有则作为 thinking
-            if (toolCalls.length > 0 || currentBlockType === "text" && currentToolName) {
-              // 后续文本块视为 thinking（理论上 Anthropic 不会在 tool_use 后再有 text）
-              if (!thinkingStarted) {
-                this.emit({ type: "thinking", data: "" });
-                thinkingStarted = true;
-              }
-              this.emit({ type: "thinking_delta", data: delta.text });
-            } else {
-              if (!messageStarted) {
-                this.emit({ type: "message", data: "" });
-                messageStarted = true;
-              }
-              this.emit({ type: "message_delta", data: delta.text });
+            // 统一发 message_delta，前端按 <think> 标签判别思考
+            if (!messageStarted) {
+              this.emit({ type: "message", data: "" });
+              messageStarted = true;
             }
+            this.emit({ type: "message_delta", data: delta.text });
           } else if (delta.type === "input_json_delta" && delta.partial_json) {
             currentToolArgs += delta.partial_json;
           }

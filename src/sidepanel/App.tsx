@@ -326,19 +326,6 @@ export default function App() {
         return;
       }
 
-      if (event.type === "message_to_thinking") {
-        // 流式中发现 content 其实是 thinking，把最后一个 assistant 改为 thinking
-        setLogs((prev) => {
-          const lastIdx = prev.findLastIndex((l) => l.type === "assistant");
-          if (lastIdx === -1) return prev;
-          const updated = [...prev];
-          const old = updated[lastIdx];
-          updated[lastIdx] = { ...old, type: "thinking", thinkingDone: false };
-          return updated;
-        });
-        return;
-      }
-
       if (event.type === "tool_call") {
         const data = event.data as { name: string; args: string; id: string; needsPermission?: boolean };
         setLogs((prev) => [...prev, {
