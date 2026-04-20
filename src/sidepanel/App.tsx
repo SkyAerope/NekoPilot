@@ -553,18 +553,27 @@ export default function App() {
     if (running) return;
     const idx = logs.findIndex((l) => l.id === entryId);
     if (idx < 0) return;
+    // 定位目标 user entry 及其在 user 序列中的索引
+    let userIdx = -1;
     let userEntry: LogEntry | undefined;
     if (isUser) {
+      userIdx = idx;
       userEntry = logs[idx];
     } else {
       for (let i = idx - 1; i >= 0; i--) {
-        if (logs[i].type === "user") { userEntry = logs[i]; break; }
+        if (logs[i].type === "user") { userIdx = i; userEntry = logs[i]; break; }
       }
     }
-    if (!userEntry) return;
-    await sendMessage("agent:reset");
-    const newEntry = { ...userEntry, id: ++logIdCounter, timestamp: Date.now() };
-    setLogs([newEntry]);
+    if (!userEntry || userIdx < 0) return;
+    // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
+    let turnIndex = 0;
+    for (let i = 0; i < userIdx; i++) {
+      if (logs[i].type === "user") turnIndex++;
+    }
+    // 后端截断到该 user 消息之前（不含），保留先前对话
+    await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
+    // 前端 logs 也截断到该 user 消息之前
+    setLogs(logs.slice(0, userIdx));
     const text = userEntry.content.replace(/\n\[附件:.*?\]$/s, "");
     const elementContext = userEntry.pickedElements
       ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
@@ -575,6 +584,9 @@ export default function App() {
       setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
       return;
     }
+    // 重新追加用户消息到 logs（保持原始内容/附件信息便于再次重试）
+    const replayedEntry: LogEntry = { ...userEntry, id: ++logIdCounter, timestamp: Date.now() };
+    setLogs((prev) => [...prev, replayedEntry]);
     setRunning(true);
     try {
       await sendMessage("agent:start", {

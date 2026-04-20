@@ -85,6 +85,24 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       }
       return { ok: true };
     }
+    case "agent:truncateBeforeUserTurn": {
+      // 截断对话历史到第 turnIndex 条 user 消息之前（用于重试）
+      const { turnIndex } = message.payload as { turnIndex: number };
+      let userCount = 0;
+      let cutAt = conversationHistory.length;
+      for (let i = 0; i < conversationHistory.length; i++) {
+        if (conversationHistory[i].role === "user") {
+          if (userCount === turnIndex) { cutAt = i; break; }
+          userCount++;
+        }
+      }
+      conversationHistory = conversationHistory.slice(0, cutAt);
+      if (agentLoop) {
+        agentLoop.abort();
+        agentLoop = null;
+      }
+      return { ok: true, remaining: conversationHistory.length };
+    }
     case "agent:approve": {
       agentLoop?.resolvePermission(true);
       return { ok: true };

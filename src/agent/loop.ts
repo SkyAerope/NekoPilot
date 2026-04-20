@@ -23,6 +23,7 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 注意：
 - 坐标基于页面视口左上角
 - 使用 read_page_interactive 获取可交互元素列表更高效
+- 使用 jsClick 或 jsSet 处理视口较小，但需要操作大量元素的页面更高效
 - 每次操作后用 screenshot 确认结果
 - 如果操作失败，尝试其他方法`;
 
