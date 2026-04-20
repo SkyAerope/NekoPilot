@@ -216,15 +216,8 @@ export default function App() {
   const handlePickElement = useCallback(async () => {
     if (picking) return;
     setPicking(true);
-    const pickingLogId = ++logIdCounter;
-    setLogs((prev) => [
-      ...prev,
-      { id: pickingLogId, type: "thinking", content: "正在选择页面元素，点击元素选中，按 ESC 取消...", timestamp: Date.now() },
-    ]);
     try {
       const result = await sendMessage<{ element: Record<string, unknown> | null; timeout?: boolean }>("pick:start");
-      // 移除选择中提示
-      setLogs((prev) => prev.filter((l) => l.id !== pickingLogId));
       if (result.element) {
         const el = result.element;
         setPickedElements((prev) => [
@@ -317,8 +310,18 @@ export default function App() {
           }}
         >
           {/* 附加 Chip 区域 */}
-          {(pickedElements.length > 0 || attachments.length > 0) && (
+          {(picking || pickedElements.length > 0 || attachments.length > 0) && (
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, px: 1.5, pt: 1, pb: 0 }}>
+              {picking && (
+                <Chip
+                  label="正在选择元素，按 ESC 取消"
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
+                  sx={{ fontSize: "0.75rem" }}
+                />
+              )}
               {pickedElements.map((el) => (
                 <Chip
                   key={`el-${el.id}`}
@@ -358,7 +361,7 @@ export default function App() {
             disabled={running}
             sx={{
               px: 2,
-              pt: pickedElements.length > 0 || attachments.length > 0 ? 0.5 : 1.5,
+              pt: picking || pickedElements.length > 0 || attachments.length > 0 ? 0.5 : 1.5,
               pb: 0.5,
               fontSize: "0.9rem",
             }}

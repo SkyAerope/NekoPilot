@@ -100,8 +100,10 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
 
           const overlay = document.createElement('div');
           overlay.id = '__nekopilot-overlay';
-          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2147483647;cursor:crosshair;';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2147483647;cursor:crosshair;outline:none;';
+          overlay.tabIndex = 0;
           document.body.appendChild(overlay);
+          overlay.focus();
 
           const highlight = document.createElement('div');
           highlight.style.cssText = 'position:fixed;border:2px solid #a78bfa;background:rgba(167,139,250,0.15);pointer-events:none;z-index:2147483646;transition:all 0.05s;';
@@ -155,13 +157,12 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           });
 
           // ESC 取消
-          document.addEventListener('keydown', function handler(e) {
+          overlay.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
               overlay.remove();
               highlight.remove();
               window.__nekopilotPicker = false;
               window.__nekopilotPickResult = null;
-              document.removeEventListener('keydown', handler);
             }
           });
 
