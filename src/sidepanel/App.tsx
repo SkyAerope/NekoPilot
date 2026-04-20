@@ -131,6 +131,10 @@ type LogSegment =
   | { kind: "assistant"; entry: LogEntry }
   | { kind: "steps"; entries: LogEntry[] };
 
+type Turn =
+  | { kind: "user"; segment: LogSegment & { kind: "user" } }
+  | { kind: "model"; segments: LogSegment[]; firstId: number };
+
 function groupLogs(logs: LogEntry[]): LogSegment[] {
   const segments: LogSegment[] = [];
   let currentSteps: LogEntry[] = [];
@@ -150,6 +154,31 @@ function groupLogs(logs: LogEntry[]): LogSegment[] {
   }
   flushSteps();
   return segments;
+}
+
+function groupIntoTurns(segments: LogSegment[]): Turn[] {
+  const turns: Turn[] = [];
+  let modelSegs: LogSegment[] = [];
+  let modelFirstId = 0;
+  const flushModel = () => {
+    if (modelSegs.length > 0) {
+      turns.push({ kind: "model", segments: [...modelSegs], firstId: modelFirstId });
+      modelSegs = [];
+    }
+  };
+  for (const seg of segments) {
+    if (seg.kind === "user") {
+      flushModel();
+      turns.push({ kind: "user", segment: seg });
+    } else {
+      if (modelSegs.length === 0) {
+        modelFirstId = seg.kind === "steps" ? seg.entries[0].id : seg.entry.id;
+      }
+      modelSegs.push(seg);
+    }
+  }
+  flushModel();
+  return turns;
 }
 
 const markdownSx = {
@@ -557,6 +586,7 @@ export default function App() {
   }, []);
 
   const segments = useMemo(() => groupLogs(logs), [logs]);
+  const turns = useMemo(() => groupIntoTurns(segments), [segments]);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(new Set());
 
   // 自动展开/折叠 steps 分组
@@ -612,8 +642,9 @@ export default function App() {
 
       {/* 对话区 */}
       <Box sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
-        {segments.map((seg) => {
-          if (seg.kind === "user") {
+        {turns.map((turn) => {
+          if (turn.kind === "user") {
+            const seg = turn.segment;
             return (
               <Box key={seg.entry.id} sx={{ mb: 2, mt: 1, "&:hover .hover-actions": { opacity: 1 } }}>
                 <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -642,48 +673,56 @@ export default function App() {
               </Box>
             );
           }
-          if (seg.kind === "thinking") {
-            return (
-              <Box key={seg.entry.id} sx={{ mb: 1, "&:hover .hover-actions": { opacity: 1 }, ...markdownSx }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
-                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25, mt: 0.25 }}>
-                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entry.content)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entry.id, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                </Stack>
-              </Box>
-            );
-          }
-          if (seg.kind === "assistant") {
-            return (
-              <Box key={seg.entry.id} sx={{ mb: 2, "&:hover .hover-actions": { opacity: 1 }, ...markdownSx }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
-                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25, mt: 0.25 }}>
-                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entry.content)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entry.id, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                </Stack>
-              </Box>
-            );
-          }
-          if (seg.kind === "steps") {
-            const groupKey = seg.entries[0].id;
-            return (
-              <Box key={groupKey} sx={{ "&:hover > .hover-actions": { opacity: 1 } }}>
-                <StepsGroup
-                  entries={seg.entries}
-                  expanded={expandedGroupKeys.has(groupKey)}
-                  onToggle={() => toggleGroup(groupKey)}
-                  onApprove={handleApprove}
-                  onReject={handleReject}
-                  onDismiss={handleDismissLog}
-                />
+          // model turn: 多个 segment 组成一个完整回复块
+          const isLast = turn === turns[turns.length - 1];
+          const isComplete = !isLast || !running;
+          // 收集所有文本用于复制
+          const allText = turn.segments.map((seg) => {
+            if (seg.kind === "thinking" || seg.kind === "assistant") return seg.entry.content;
+            if (seg.kind === "steps") return seg.entries.filter((e) => e.type === "tool_call").map((e) => `${getToolLabel(e.toolName)}: ${e.toolResult ?? "..."}`).join("\n");
+            return "";
+          }).filter(Boolean).join("\n\n");
+          return (
+            <Box key={turn.firstId} sx={{ mb: 2, "&:hover > .hover-actions": { opacity: 1 } }}>
+              {turn.segments.map((seg) => {
+                if (seg.kind === "thinking") {
+                  return (
+                    <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
+                    </Box>
+                  );
+                }
+                if (seg.kind === "assistant") {
+                  return (
+                    <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
+                    </Box>
+                  );
+                }
+                if (seg.kind === "steps") {
+                  const groupKey = seg.entries[0].id;
+                  return (
+                    <StepsGroup
+                      key={groupKey}
+                      entries={seg.entries}
+                      expanded={expandedGroupKeys.has(groupKey)}
+                      onToggle={() => toggleGroup(groupKey)}
+                      onApprove={handleApprove}
+                      onReject={handleReject}
+                      onDismiss={handleDismissLog}
+                    />
+                  );
+                }
+                return null;
+              })}
+              {isComplete && (
                 <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25 }}>
-                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entries.filter((e) => e.type === "tool_call").map((e) => `${getToolLabel(e.toolName)}: ${e.toolResult ?? "..."}`).join("\n"))} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entries[0].id, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(allText)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(turn.firstId, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
                 </Stack>
-              </Box>
-            );
-          }
-          return null;
+              )}
+            </Box>
+          );
         })}
         {running && (logs.length === 0 || logs[logs.length - 1].type === "user") && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 1, pl: 0.5 }}>
