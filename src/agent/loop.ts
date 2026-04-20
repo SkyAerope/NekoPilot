@@ -31,6 +31,7 @@ export class AgentLoop {
   private messages: ChatMessage[] = [];
   private aborted = false;
   private permissionResolve: ((approved: boolean) => void) | null = null;
+  private httpAbortController: AbortController | null = null;
 
   constructor(
     private tools: ToolExecutor,
@@ -43,6 +44,11 @@ export class AgentLoop {
     if (this.permissionResolve) {
       this.permissionResolve(false);
       this.permissionResolve = null;
+    }
+    // 立即掐断 LLM HTTP 流
+    if (this.httpAbortController) {
+      try { this.httpAbortController.abort(); } catch { /* ignore */ }
+      this.httpAbortController = null;
     }
   }
 
@@ -68,20 +74,27 @@ export class AgentLoop {
       ...history,
     ];
 
+    const finishWith = (text: string, eventType: "done" | "error" = "done") => {
+      this.finalizePendingToolUses();
+      this.emit({ type: eventType, data: text });
+      if (eventType === "error") this.emit({ type: "done", data: text });
+      return { text, messages: this.messages.slice(1) };
+    };
+
     for (let i = 0; i < this.config.maxIterations; i++) {
       if (this.aborted) {
-        this.emit({ type: "done", data: "Agent was stopped." });
-        return { text: "Agent was stopped.", messages: this.messages.slice(1) };
+        return finishWith("Agent was stopped.");
       }
 
       let response: ChatMessage;
       try {
         response = await this.callLlm();
       } catch (err) {
-        const errorMsg = String(err);
-        this.emit({ type: "error", data: errorMsg });
-        this.emit({ type: "done", data: errorMsg });
-        return { text: errorMsg, messages: this.messages.slice(1) };
+        // 用户主动 abort：不要把 AbortError 当 LLM 错误透传
+        if (this.aborted) {
+          return finishWith("Agent was stopped.");
+        }
+        return finishWith(String(err), "error");
       }
 
       // 如果没有 tool_calls，说明 agent 回复了最终结果
@@ -89,13 +102,10 @@ export class AgentLoop {
         const rawContent = response.content ?? "";
         const text = typeof rawContent === "string" ? rawContent : rawContent.filter(p => p.type === "text").map(p => (p as { type: "text"; text: string }).text).join("");
         this.messages.push({ role: "assistant", content: text });
-        // 流式已经通过 message_delta 发送了内容，这里只发 done
-        this.emit({ type: "done", data: text });
-        return { text, messages: this.messages.slice(1) };
+        return finishWith(text);
       }
 
       // 有 tool_calls，执行
-      // 流式已经通过 thinking_delta 发送了 content
       this.messages.push(response);
 
       const deferredMessages: ChatMessage[] = [];
@@ -103,14 +113,57 @@ export class AgentLoop {
         if (this.aborted) break;
         await this.executeToolCall(toolCall, deferredMessages);
       }
-      // 将截图等需要延迟的消息追加到所有 tool_result 之后
       this.messages.push(...deferredMessages);
+
+      // 工具循环中被 abort：在退出前补齐缺失的 tool_result，然后结束
+      if (this.aborted) {
+        return finishWith("Agent was stopped.");
+      }
     }
 
-    const msg = "达到最大迭代次数，Agent 停止。";
-    this.emit({ type: "done", data: msg });
-    return { text: msg, messages: this.messages.slice(1) };
+    return finishWith("达到最大迭代次数，Agent 停止。");
   }
+
+  /**
+   * 扫描 messages 末尾的最后一条 assistant tool_calls，
+   * 给所有缺失对应 tool_result 的 tool_call 补一条占位结果，
+   * 否则下一轮 LLM 调用会因 tool_use/tool_result 不匹配报 400。
+   */
+  private finalizePendingToolUses(): void {
+    // 找到最后一条带 tool_calls 的 assistant
+    let asstIdx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+        asstIdx = i;
+        break;
+      }
+      // 跨越 tool/user 消息继续向前找
+      if (m.role === "assistant" && (!m.tool_calls || m.tool_calls.length === 0)) return;
+    }
+    if (asstIdx < 0) return;
+    const asst = this.messages[asstIdx];
+    const calls = asst.tool_calls!;
+    // 收集 asstIdx 之后已存在的 tool_result 对应的 id
+    const seen = new Set<string>();
+    for (let i = asstIdx + 1; i < this.messages.length; i++) {
+      const m = this.messages[i];
+      if (m.role === "tool" && m.tool_call_id) seen.add(m.tool_call_id);
+    }
+    // 找到第一个缺失 tool_result 的位置（按 calls 顺序），把缺失项补在 asst 后续的 tool 序列末尾
+    const missing = calls.filter((c) => !seen.has(c.id));
+    if (missing.length === 0) return;
+    // 找到 tool_result 序列结尾位置，将占位插入此处（保持顺序）
+    let insertAt = asstIdx + 1;
+    while (insertAt < this.messages.length && this.messages[insertAt].role === "tool") insertAt++;
+    const fillers: ChatMessage[] = missing.map((c) => ({
+      role: "tool",
+      tool_call_id: c.id,
+      content: JSON.stringify({ success: false, error: "用户停止了执行，工具未运行" }),
+    }));
+    this.messages.splice(insertAt, 0, ...fillers);
+  }
+
 
   private async callLlm(): Promise<ChatMessage> {
     if (this.config.provider === "anthropic") {
@@ -136,6 +189,7 @@ export class AgentLoop {
         Authorization: `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: (this.httpAbortController = new AbortController()).signal,
     });
 
     if (!resp.ok) {
@@ -363,6 +417,7 @@ export class AgentLoop {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
+      signal: (this.httpAbortController = new AbortController()).signal,
     });
 
     if (!resp.ok) {
