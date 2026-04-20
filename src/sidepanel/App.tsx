@@ -72,6 +72,7 @@ interface LogEntry {
   needsPermission?: boolean;
   permissionResolved?: boolean;
   screenshotData?: string;
+  pickedElements?: PickedElement[];
 }
 
 let logIdCounter = 0;
@@ -237,9 +238,10 @@ export default function App() {
         const data = event.data as { name: string; result: { success: boolean; data?: unknown; error?: string }; id: string };
         setLogs((prev) => prev.map((log) => {
           if (log.type === "tool_call" && log.toolCallId === data.id) {
+            const resultData = data.result.data ?? data.result.error;
             return {
               ...log,
-              toolResult: JSON.stringify(data.result.data ?? data.result.error, null, 2),
+              toolResult: resultData !== undefined ? JSON.stringify(resultData, null, 2) : "done",
               toolSuccess: data.result.success,
               screenshotData: data.name === "screenshot" && data.result.success ? String(data.result.data) : undefined,
             };
@@ -320,8 +322,9 @@ export default function App() {
       {
         id: ++logIdCounter,
         type: "user",
-        content: fullMessage + (attachmentNames.length ? `\n[附件: ${attachmentNames.join(", ")}]` : ""),
+        content: text + (attachmentNames.length ? `\n[附件: ${attachmentNames.join(", ")}]` : ""),
         timestamp: Date.now(),
+        pickedElements: pickedElements.length > 0 ? [...pickedElements] : undefined,
       },
     ]);
 
@@ -461,7 +464,7 @@ export default function App() {
         groupStart--;
       }
       setExpandedGroupKeys((prev) => new Set([...prev, logs[groupStart].id]));
-    } else if (last.type === "assistant") {
+    } else if (last.type === "assistant" || last.type === "thinking") {
       setExpandedGroupKeys(new Set());
     }
   }, [logs]);
@@ -508,18 +511,31 @@ export default function App() {
           if (seg.kind === "user") {
             return (
               <Box key={seg.entry.id} sx={{ mb: 2, mt: 1 }}>
-                <Paper sx={{ p: 1.5, bgcolor: "primary.dark", borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                <Paper sx={{ p: 1.5, bgcolor: "background.paper", borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   <Typography variant="body2">{seg.entry.content}</Typography>
+                  {seg.entry.pickedElements && seg.entry.pickedElements.length > 0 && (
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
+                      {seg.entry.pickedElements.map((el) => (
+                        <Chip
+                          key={`uel-${el.id}`}
+                          label={`<${el.tag}> ${el.text || el.selector}`}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                          icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
+                          sx={{ maxWidth: 240, fontSize: "0.75rem" }}
+                        />
+                      ))}
+                    </Box>
+                  )}
                 </Paper>
               </Box>
             );
           }
           if (seg.kind === "thinking") {
             return (
-              <Box key={seg.entry.id} sx={{ mb: 1 }}>
-                <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
-                  {seg.entry.content}
-                </Typography>
+              <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.entry.content}</ReactMarkdown>
               </Box>
             );
           }
@@ -727,6 +743,25 @@ function StepsGroup({
   onDismiss: (id: number) => void;
 }) {
   const stepCount = entries.filter((e) => e.type === "tool_call").length;
+
+  // 只有 1 步时直接显示，不包裹
+  if (stepCount <= 1) {
+    return (
+      <Box sx={{ mb: 1 }}>
+        {entries.map((entry, i) => (
+          <TimelineStep
+            key={entry.id}
+            entry={entry}
+            showTopLine={i > 0}
+            showBottomLine={i < entries.length - 1}
+            onApprove={onApprove}
+            onReject={onReject}
+            onDismiss={onDismiss}
+          />
+        ))}
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ mb: 1 }}>
