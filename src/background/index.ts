@@ -11,6 +11,8 @@ const tools = new ToolExecutor(cdp);
 
 let agentLoop: AgentLoop | null = null;
 let conversationHistory: ChatMessage[] = [];
+/** 真正由用户发起的消息在 conversationHistory 中的索引（不含工具产生的 user 消息，例如截图） */
+let userTurnIndices: number[] = [];
 
 // 点击扩展图标时打开 side panel
 chrome.action.onClicked.addListener((_tab) => {
@@ -61,6 +63,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       // 始终重连到当前活动标签页
       try { await cdp.detach(); } catch { /* 未连接时忽略 */ }
       await cdp.attach(tab.id!);
+      userTurnIndices.push(conversationHistory.length);
       conversationHistory.push({ role: "user", content: userMessage });
       agentLoop = new AgentLoop(tools, config, (event) => {
         chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
@@ -81,6 +84,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
     }
     case "agent:reset": {
       conversationHistory = [];
+      userTurnIndices = [];
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;
@@ -89,17 +93,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       return { ok: true };
     }
     case "agent:truncateBeforeUserTurn": {
-      // 截断对话历史到第 turnIndex 条 user 消息之前（用于重试）
+      // 截断对话历史到第 turnIndex 个真用户消息之前（用于重试）
       const { turnIndex } = message.payload as { turnIndex: number };
-      let userCount = 0;
-      let cutAt = conversationHistory.length;
-      for (let i = 0; i < conversationHistory.length; i++) {
-        if (conversationHistory[i].role === "user") {
-          if (userCount === turnIndex) { cutAt = i; break; }
-          userCount++;
-        }
-      }
+      const cutAt = userTurnIndices[turnIndex] ?? conversationHistory.length;
       conversationHistory = conversationHistory.slice(0, cutAt);
+      userTurnIndices = userTurnIndices.slice(0, turnIndex);
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;
