@@ -256,7 +256,22 @@ export class ToolExecutor {
             const text = rawText.length > 80 ? rawText.slice(0, 80) + '...(+' + (rawText.length - 80) + ' chars)' : rawText;
             const ph = el.getAttribute('placeholder') || '';
             const val = ('value' in el && typeof el.value === 'string') ? el.value : '';
-            lines.push('- ref: interactive[' + i + ']');
+            // 生成唯一 CSS 选择器
+            var selector = '';
+            if (el.id) { selector = '#' + CSS.escape(el.id); }
+            else {
+              var parts = [];
+              var cur = el;
+              while (cur && cur !== document.body && cur !== document.documentElement) {
+                var parent = cur.parentElement;
+                if (!parent) break;
+                var idx = Array.from(parent.children).indexOf(cur) + 1;
+                parts.unshift(cur.tagName.toLowerCase() + ':nth-child(' + idx + ')');
+                cur = parent;
+              }
+              selector = parts.length > 0 ? parts.join(' > ') : tag;
+            }
+            lines.push('- selector: ' + selector);
             lines.push('  tag: ' + tag);
             if (type) lines.push('  type: ' + type);
             if (role) lines.push('  role: ' + role);
@@ -396,8 +411,20 @@ export class ToolExecutor {
           const rect = el.getBoundingClientRect();
           if (rect.width === 0 && rect.height === 0) return;
           let selector = el.tagName.toLowerCase();
-          if (el.id) selector = '#' + el.id;
-          else if (el.className && typeof el.className === 'string') selector += '.' + el.className.trim().split(/\\s+/).join('.');
+          if (el.id) selector = '#' + CSS.escape(el.id);
+          else {
+            // 生成从 body 到目标的 nth-child 路径
+            var parts = [];
+            var cur = el;
+            while (cur && cur !== document.body && cur !== document.documentElement) {
+              var parent = cur.parentElement;
+              if (!parent) break;
+              var idx = Array.from(parent.children).indexOf(cur) + 1;
+              parts.unshift(cur.tagName.toLowerCase() + ':nth-child(' + idx + ')');
+              cur = parent;
+            }
+            if (parts.length > 0) selector = parts.join(' > ');
+          }
           const rawText = (el.textContent || '').trim();
           const textDisplay = rawText.length > 120 ? rawText.slice(0, 120) + '...(+' + (rawText.length - 120) + ' chars)' : rawText;
           results.push({ tag: el.tagName.toLowerCase(), text: textDisplay, selector, rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } });
