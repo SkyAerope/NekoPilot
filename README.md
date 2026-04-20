@@ -4,7 +4,7 @@
 
 NekoPilot 是一个运行在 Chrome 侧边栏的浏览器自动化助手。它通过 Chrome DevTools Protocol (CDP) 直接驱动当前标签页，把"看页面 → 思考 → 操作"的循环交给 LLM 完成。BYOK（自带 API Key），数据不经过任何第三方服务。
 
-![manifest v3](https://img.shields.io/badge/Chrome-MV3-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![pnpm](https://img.shields.io/badge/pnpm-required-orange)
+![manifest v3](https://img.shields.io/badge/Chrome-MV3-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green) ![pnpm](https://img.shields.io/badge/pnpm-required-orange)
 
 ---
 
