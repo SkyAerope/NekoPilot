@@ -48,11 +48,17 @@ export class ToolExecutor {
       case "read_page_interactive":
         return this.readPageInteractive();
       case "click":
-        return this.click(params.x as number | undefined, params.y as number | undefined, params.selector as string | undefined);
+        return this.click(
+          params.x as number | undefined,
+          params.y as number | undefined,
+          params.selector as string | undefined,
+          (params.jsClick as boolean | undefined) ?? false,
+        );
       case "set_input":
         return this.setInput(
           params.selector as string,
-          params.value as string
+          params.value as string,
+          (params.jsSet as boolean | undefined) ?? false,
         );
       case "scroll":
         return this.scroll(
@@ -300,51 +306,112 @@ export class ToolExecutor {
     return this.evaluate(expression);
   }
 
-  private async click(x?: number, y?: number, selector?: string): Promise<void> {
-    let cx: number;
-    let cy: number;
+  private async click(x?: number, y?: number, selector?: string, jsClick = false): Promise<void> {
+    // 场景 1: 使用 selector —— 先 scrollIntoViewIfNeeded，再按 jsClick 分派
     if (selector) {
-      const expr = `(function() {
-        const el = document.querySelector(${JSON.stringify(selector)});
+      const selJson = JSON.stringify(selector);
+      const prepExpr = `(function() {
+        const el = document.querySelector(${selJson});
         if (!el) return null;
+        if (typeof el.scrollIntoViewIfNeeded === 'function') {
+          el.scrollIntoViewIfNeeded();
+        } else {
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
         const r = el.getBoundingClientRect();
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
       })()`;
-      const pos = await this.evaluate<{ x: number; y: number } | null>(expr);
+      const pos = await this.evaluate<{ x: number; y: number } | null>(prepExpr);
       if (!pos) throw new Error(`Element not found: ${selector}`);
-      cx = pos.x;
-      cy = pos.y;
-    } else if (x !== undefined && y !== undefined) {
-      cx = x;
-      cy = y;
-    } else {
-      throw new Error("click requires either (x, y) or selector");
+
+      if (jsClick) {
+        // 用页面端 element.click() 触发
+        const clickExpr = `(function() {
+          const el = document.querySelector(${selJson});
+          if (!el) return false;
+          el.click();
+          return true;
+        })()`;
+        await this.evaluate<boolean>(clickExpr);
+        return;
+      }
+      await this.dispatchMouseClick(pos.x, pos.y);
+      return;
     }
-    const common = { x: cx, y: cy, button: "left" as const, clickCount: 1 };
-    await this.cdp.send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      ...common,
-    });
-    await this.cdp.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      ...common,
-    });
+
+    // 场景 2: 使用坐标 —— 用 elementFromPoint 获取元素后 scrollIntoViewIfNeeded
+    if (x !== undefined && y !== undefined) {
+      const prepExpr = `(function() {
+        const el = document.elementFromPoint(${x}, ${y});
+        if (el && typeof el.scrollIntoViewIfNeeded === 'function') {
+          el.scrollIntoViewIfNeeded();
+        }
+        return true;
+      })()`;
+      await this.evaluate<boolean>(prepExpr).catch(() => {/* 忽略 prep 阶段异常 */});
+
+      if (jsClick) {
+        const clickExpr = `(function() {
+          const el = document.elementFromPoint(${x}, ${y});
+          if (!el) return false;
+          el.click();
+          return true;
+        })()`;
+        const ok = await this.evaluate<boolean>(clickExpr);
+        if (!ok) throw new Error(`No element at (${x}, ${y})`);
+        return;
+      }
+      await this.dispatchMouseClick(x, y);
+      return;
+    }
+
+    throw new Error("click requires either (x, y) or selector");
   }
 
-  private async setInput(selector: string, value: string): Promise<void> {
-    // 先聚焦元素
+  private async dispatchMouseClick(x: number, y: number): Promise<void> {
+    const common = { x, y, button: "left" as const, clickCount: 1 };
+    await this.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...common });
+    await this.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...common });
+  }
+
+  private async setInput(selector: string, value: string, jsSet = false): Promise<void> {
+    const selJson = JSON.stringify(selector);
+    // 先 scrollIntoViewIfNeeded + focus
+    const prepExpr = `(function() {
+      const el = document.querySelector(${selJson});
+      if (!el) return false;
+      if (typeof el.scrollIntoViewIfNeeded === 'function') {
+        el.scrollIntoViewIfNeeded();
+      } else {
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      el.focus();
+      return true;
+    })()`;
+    const ok = await this.evaluate<boolean>(prepExpr);
+    if (!ok) throw new Error(`Element not found: ${selector}`);
+
+    if (jsSet) {
+      // 纯 JS 赋值 + 派发事件（适合受控框架或非标准组件）
+      const setExpr = `(function() {
+        const el = document.querySelector(${selJson});
+        if (!el) return false;
+        el.value = ${JSON.stringify(value)};
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`;
+      await this.evaluate<boolean>(setExpr);
+      return;
+    }
+
+    // CDP 路径：清空 → insertText → 派发 input
     await this.cdp.send("Runtime.evaluate", {
-      expression: `document.querySelector(${JSON.stringify(selector)}).focus()`,
+      expression: `document.querySelector(${selJson}).value = ''`,
     });
-    // 清除已有内容
-    await this.cdp.send("Runtime.evaluate", {
-      expression: `document.querySelector(${JSON.stringify(selector)}).value = ''`,
-    });
-    // 使用 Input.insertText 输入
     await this.cdp.send("Input.insertText", { text: value });
-    // 触发 input 事件
     await this.cdp.send("Runtime.evaluate", {
-      expression: `document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new Event('input', {bubbles: true}))`,
+      expression: `document.querySelector(${selJson}).dispatchEvent(new Event('input', { bubbles: true }))`,
     });
   }
 

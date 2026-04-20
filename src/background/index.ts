@@ -93,6 +93,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       agentLoop?.resolvePermission(false);
       return { ok: true };
     }
+    case "agent:setMode": {
+      const { mode } = message.payload as { mode: "ask" | "auto" };
+      agentLoop?.setPermissionMode(mode);
+      return { ok: true };
+    }
 
     // ── 设置 ──
     case "settings:get": {

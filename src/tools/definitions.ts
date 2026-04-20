@@ -38,22 +38,30 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "click",
-    description: "在指定坐标或选择器指定的元素上执行鼠标点击。传入 selector 时点击该元素的中央，此时 x/y 可省略。",
+    description: "在指定坐标或选择器指定的元素上执行点击。传入 selector 时点击该元素中央，此时 x/y 可省略。点击前会自动 scrollIntoViewIfNeeded 确保元素可见。",
     parameters: {
       x: { type: "number", description: "点击位置的 X 坐标（与 selector 二选一）" },
       y: { type: "number", description: "点击位置的 Y 坐标（与 selector 二选一）" },
       selector: { type: "string", description: "目标元素的 CSS 选择器，点击其中心位置" },
+      jsClick: {
+        type: "boolean",
+        description: "默认 false，使用 CDP 派发真实鼠标事件；设为 true 时改用页面端 element.click()，适合被遮挡或非标准事件处理的元素",
+      },
     },
   },
   {
     name: "set_input",
-    description: "聚焦指定元素并输入文本。",
+    description: "聚焦指定元素并输入文本。输入前会自动 scrollIntoViewIfNeeded 并 focus。",
     parameters: {
       selector: {
         type: "string",
         description: "目标元素的 CSS 选择器",
       },
       value: { type: "string", description: "要输入的文本" },
+      jsSet: {
+        type: "boolean",
+        description: "默认 false，使用 CDP Input.insertText 模拟键盘；设为 true 时直接赋值 element.value 并派发 input/change 事件，适合受控组件或非原生输入框",
+      },
     },
     required: ["selector", "value"],
   },

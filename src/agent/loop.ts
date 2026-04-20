@@ -52,6 +52,15 @@ export class AgentLoop {
     }
   }
 
+  /** 运行时切换权限模式；切到 auto 时会自动放行当前等待的审批 */
+  setPermissionMode(mode: "ask" | "auto"): void {
+    this.config.permissionMode = mode;
+    if (mode === "auto" && this.permissionResolve) {
+      this.permissionResolve(true);
+      this.permissionResolve = null;
+    }
+  }
+
   async run(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
     this.messages = [
       { role: "system", content: SYSTEM_PROMPT },

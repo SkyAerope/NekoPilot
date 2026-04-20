@@ -378,6 +378,8 @@ export default function App() {
   const setAutoModeAndPersist = useCallback((value: boolean) => {
     setAutoMode(value);
     chrome.storage.local.set({ autoMode: value });
+    // 实时同步给正在运行的 agent
+    sendMessage("agent:setMode", { mode: value ? "auto" : "ask" }).catch(() => {});
   }, []);
 
   const handleAttach = useCallback(async () => {
