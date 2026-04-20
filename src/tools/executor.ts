@@ -271,15 +271,15 @@ export class ToolExecutor {
               }
               selector = parts.length > 0 ? parts.join(' > ') : tag;
             }
-            lines.push('- selector: ' + selector);
+            lines.push('- selector: ' + JSON.stringify(selector));
             lines.push('  tag: ' + tag);
-            if (type) lines.push('  type: ' + type);
-            if (role) lines.push('  role: ' + role);
-            if (text) lines.push('  text: ' + text);
-            if (ph) lines.push('  placeholder: ' + ph);
-            if (val) lines.push('  value: ' + val);
-            lines.push('  position: { x: ' + rect.x.toFixed(0) + ', y: ' + rect.y.toFixed(0) + ', width: ' + rect.width.toFixed(0) + ', height: ' + rect.height.toFixed(0) + ' }');
-            lines.push('  center: { x: ' + (rect.x + rect.width / 2).toFixed(0) + ', y: ' + (rect.y + rect.height / 2).toFixed(0) + ' }');
+            if (type) lines.push('  type: ' + JSON.stringify(type));
+            if (role) lines.push('  role: ' + JSON.stringify(role));
+            if (text) lines.push('  text: ' + JSON.stringify(text));
+            if (ph) lines.push('  placeholder: ' + JSON.stringify(ph));
+            if (val) lines.push('  value: ' + JSON.stringify(val));
+            lines.push('  position: {x: ' + rect.x.toFixed(0) + ', y: ' + rect.y.toFixed(0) + ', width: ' + rect.width.toFixed(0) + ', height: ' + rect.height.toFixed(0) + '}');
+            lines.push('  center: {x: ' + (rect.x + rect.width / 2).toFixed(0) + ', y: ' + (rect.y + rect.height / 2).toFixed(0) + '}');
           } catch(e) { /* 跳过异常元素 */ }
         });
         if (lines.length === 0) return 'no_results: 当前页面没有可见的可交互元素';
@@ -457,10 +457,10 @@ export class ToolExecutor {
           var cx = r.rect.x + Math.round(r.rect.w / 2);
           var cy = r.rect.y + Math.round(r.rect.h / 2);
           return '- tag: ' + r.tag
-            + '\\n  text: ' + r.text
-            + '\\n  selector: ' + r.selector
-            + '\\n  position: { x: ' + r.rect.x + ', y: ' + r.rect.y + ', width: ' + r.rect.w + ', height: ' + r.rect.h + ' }'
-            + '\\n  center: { x: ' + cx + ', y: ' + cy + ' }';
+            + '\\n  text: ' + JSON.stringify(r.text)
+            + '\\n  selector: ' + JSON.stringify(r.selector)
+            + '\\n  position: {x: ' + r.rect.x + ', y: ' + r.rect.y + ', width: ' + r.rect.w + ', height: ' + r.rect.h + '}'
+            + '\\n  center: {x: ' + cx + ', y: ' + cy + '}';
         }).join('\\n');
       })()
     `;
@@ -495,7 +495,8 @@ export class ToolExecutor {
         const r = el.getBoundingClientRect();
         const x = Math.round(r.x), y = Math.round(r.y);
         const w = Math.round(r.width), h = Math.round(r.height);
-        return 'x: ' + x + '\\ny: ' + y + '\\nwidth: ' + w + '\\nheight: ' + h + '\\ncenter: (' + Math.round(x + w/2) + ', ' + Math.round(y + h/2) + ')';
+        return 'position: {x: ' + x + ', y: ' + y + ', width: ' + w + ', height: ' + h + '}'
+          + '\\ncenter: {x: ' + Math.round(x + w/2) + ', y: ' + Math.round(y + h/2) + '}';
       })()
     `;
     return this.evaluate(expression);
