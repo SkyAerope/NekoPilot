@@ -4,12 +4,13 @@
 import { CdpManager } from "./cdp";
 import { ToolExecutor } from "../tools/executor";
 import { AgentLoop } from "../agent/loop";
-import type { AgentConfig } from "../agent/types";
+import type { AgentConfig, ChatMessage } from "../agent/types";
 
 const cdp = new CdpManager();
 const tools = new ToolExecutor(cdp);
 
 let agentLoop: AgentLoop | null = null;
+let conversationHistory: ChatMessage[] = [];
 
 // 点击扩展图标时打开 side panel
 chrome.action.onClicked.addListener((_tab) => {
@@ -60,19 +61,36 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       if (!cdp.isAttached) {
         await cdp.attach(tab.id!);
       }
+      conversationHistory.push({ role: "user", content: userMessage });
       agentLoop = new AgentLoop(tools, config, (event) => {
-        // 将 agent 事件广播给 side panel
-        chrome.runtime.sendMessage({ type: "agent:event", payload: event });
+        chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
       });
-      const result = await agentLoop.run(userMessage);
+      const { text, messages } = await agentLoop.run(conversationHistory);
+      conversationHistory = messages;
       agentLoop = null;
-      return { result };
+      return { result: text };
     }
     case "agent:stop": {
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;
       }
+      return { ok: true };
+    }
+    case "agent:reset": {
+      conversationHistory = [];
+      if (agentLoop) {
+        agentLoop.abort();
+        agentLoop = null;
+      }
+      return { ok: true };
+    }
+    case "agent:approve": {
+      agentLoop?.resolvePermission(true);
+      return { ok: true };
+    }
+    case "agent:reject": {
+      agentLoop?.resolvePermission(false);
       return { ok: true };
     }
 

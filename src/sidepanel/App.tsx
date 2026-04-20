@@ -15,6 +15,8 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
+  Collapse,
+  Button,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
@@ -29,8 +31,18 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import DoubleArrowIcon from "@mui/icons-material/DoubleArrow";
 import PanToolAltIcon from "@mui/icons-material/PanToolAlt";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import CameraAltOutlinedIcon from "@mui/icons-material/CameraAltOutlined";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
+import TouchAppOutlinedIcon from "@mui/icons-material/TouchAppOutlined";
+import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
+import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
+
+// ── 类型定义 ──
 
 interface PickedElement {
   id: number;
@@ -49,19 +61,87 @@ interface Attachment {
 
 interface LogEntry {
   id: number;
-  type: "user" | "assistant" | "thinking" | "tool_call" | "tool_result" | "error";
+  type: "user" | "assistant" | "thinking" | "tool_call" | "error";
   content: string;
   timestamp: number;
+  toolName?: string;
+  toolCallId?: string;
+  toolResult?: string;
+  toolSuccess?: boolean;
+  needsPermission?: boolean;
+  permissionResolved?: boolean;
+  screenshotData?: string;
 }
 
 let logIdCounter = 0;
+
+// ── 工具图标与标签 ──
+
+function getToolIcon(name?: string) {
+  switch (name) {
+    case "screenshot":
+      return <CameraAltOutlinedIcon sx={{ fontSize: 16 }} />;
+    case "read_page_text":
+    case "read_page":
+    case "read_page_interactive":
+    case "find_element":
+    case "get_element_text":
+    case "get_element_rect":
+      return <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />;
+    case "click":
+    case "set_input":
+    case "drag":
+    case "scroll":
+      return <TouchAppOutlinedIcon sx={{ fontSize: 16 }} />;
+    default:
+      return <BuildOutlinedIcon sx={{ fontSize: 16 }} />;
+  }
+}
+
+function getToolLabel(name?: string): string {
+  const labels: Record<string, string> = {
+    screenshot: "Take screenshot",
+    read_page_text: "Extract page text",
+    read_page: "Read page structure",
+    read_page_interactive: "Find interactive elements",
+    click: "Click",
+    set_input: "Type text",
+    scroll: "Scroll page",
+    navigate: "Navigate",
+    wait: "Wait",
+    find_element: "Find element",
+    get_element_text: "Get element text",
+    get_element_rect: "Get element position",
+    drag: "Drag",
+  };
+  return labels[name ?? ""] ?? name ?? "Tool";
+}
+
+function getStepIcon(entry: LogEntry) {
+  switch (entry.type) {
+    case "user":
+      return null;
+    case "assistant":
+      return <FiberManualRecordIcon sx={{ fontSize: 8, color: "text.secondary", mt: 0.6 }} />;
+    case "thinking":
+      return <FiberManualRecordIcon sx={{ fontSize: 8, color: "text.disabled", mt: 0.6 }} />;
+    case "tool_call":
+      return <Box sx={{ color: "text.secondary", mt: 0.1 }}>{getToolIcon(entry.toolName)}</Box>;
+    case "error":
+      return <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main", mt: 0.1 }} />;
+    default:
+      return null;
+  }
+}
+
+// ── 主组件 ──
 
 export default function App() {
   const [input, setInput] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [attached, setAttached] = useState(false);
-  const [autoMode, setAutoMode] = useState(true);
+  const [autoMode, setAutoMode] = useState(false);
   const [modeMenuAnchor, setModeMenuAnchor] = useState<null | HTMLElement>(null);
   const [picking, setPicking] = useState(false);
   const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
@@ -69,6 +149,14 @@ export default function App() {
   const [elementTextLimit, setElementTextLimit] = useState(128);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 加载持久化设置
+  useEffect(() => {
+    chrome.storage.local.get(["autoMode", "settings"], (data) => {
+      if (data.autoMode !== undefined) setAutoMode(data.autoMode);
+      if (data.settings?.elementTextLimit != null) setElementTextLimit(data.settings.elementTextLimit);
+    });
+  }, []);
 
   // 监听 agent 事件
   useEffect(() => {
@@ -81,21 +169,67 @@ export default function App() {
         return;
       }
 
-      // 将 agent 事件类型映射到日志类型
-      const logType: LogEntry["type"] =
-        event.type === "message" ? "assistant" : (event.type as LogEntry["type"]);
+      if (event.type === "message") {
+        setLogs((prev) => [...prev, {
+          id: ++logIdCounter,
+          type: "assistant",
+          content: typeof event.data === "string" ? event.data : JSON.stringify(event.data),
+          timestamp: Date.now(),
+        }]);
+        return;
+      }
 
-      const entry: LogEntry = {
-        id: ++logIdCounter,
-        type: logType,
-        content:
-          typeof event.data === "string"
-            ? event.data
-            : JSON.stringify(event.data, null, 2),
-        timestamp: Date.now(),
-      };
+      if (event.type === "tool_call") {
+        const data = event.data as { name: string; args: string; id: string; needsPermission?: boolean };
+        setLogs((prev) => [...prev, {
+          id: ++logIdCounter,
+          type: "tool_call",
+          content: data.args,
+          toolName: data.name,
+          toolCallId: data.id,
+          needsPermission: data.needsPermission,
+          timestamp: Date.now(),
+        }]);
+        return;
+      }
 
-      setLogs((prev) => [...prev, entry]);
+      if (event.type === "tool_result") {
+        const data = event.data as { name: string; result: { success: boolean; data?: unknown; error?: string }; id: string };
+        setLogs((prev) => prev.map((log) => {
+          if (log.type === "tool_call" && log.toolCallId === data.id) {
+            return {
+              ...log,
+              toolResult: JSON.stringify(data.result.data ?? data.result.error, null, 2),
+              toolSuccess: data.result.success,
+              screenshotData: data.name === "screenshot" && data.result.success ? String(data.result.data) : undefined,
+            };
+          }
+          return log;
+        }));
+        return;
+      }
+
+      if (event.type === "thinking") {
+        const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
+        if (text) {
+          setLogs((prev) => [...prev, {
+            id: ++logIdCounter,
+            type: "thinking",
+            content: text,
+            timestamp: Date.now(),
+          }]);
+        }
+        return;
+      }
+
+      if (event.type === "error") {
+        setLogs((prev) => [...prev, {
+          id: ++logIdCounter,
+          type: "error",
+          content: typeof event.data === "string" ? event.data : JSON.stringify(event.data),
+          timestamp: Date.now(),
+        }]);
+      }
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
@@ -106,19 +240,16 @@ export default function App() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  useEffect(() => {
-    chrome.storage.local.get("settings", (data) => {
-      if (data.settings?.elementTextLimit != null) {
-        setElementTextLimit(data.settings.elementTextLimit);
-      }
-    });
-  }, []);
-
   // 检查连接状态
   useEffect(() => {
     sendMessage<{ attached: boolean }>("cdp:status").then((res) =>
       setAttached(res.attached)
     );
+  }, []);
+
+  const setAutoModeAndPersist = useCallback((value: boolean) => {
+    setAutoMode(value);
+    chrome.storage.local.set({ autoMode: value });
   }, []);
 
   const handleAttach = useCallback(async () => {
@@ -135,7 +266,6 @@ export default function App() {
     const text = input.trim();
     if (!text || running) return;
 
-    // 收集附加上下文
     const elementContext = pickedElements
       .map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}"]`)
       .join("\n");
@@ -155,7 +285,6 @@ export default function App() {
       },
     ]);
 
-    // 读取设置
     const settings = await sendMessage<{
       apiKey?: string;
       baseUrl?: string;
@@ -165,12 +294,7 @@ export default function App() {
     if (!settings?.apiKey) {
       setLogs((prev) => [
         ...prev,
-        {
-          id: ++logIdCounter,
-          type: "error",
-          content: "请先在设置页面配置 API Key",
-          timestamp: Date.now(),
-        },
+        { id: ++logIdCounter, type: "error", content: "请先在设置页面配置 API Key", timestamp: Date.now() },
       ]);
       return;
     }
@@ -190,12 +314,7 @@ export default function App() {
     } catch (err) {
       setLogs((prev) => [
         ...prev,
-        {
-          id: ++logIdCounter,
-          type: "error",
-          content: String(err),
-          timestamp: Date.now(),
-        },
+        { id: ++logIdCounter, type: "error", content: String(err), timestamp: Date.now() },
       ]);
       setRunning(false);
     }
@@ -218,6 +337,21 @@ export default function App() {
 
   const handleClearChat = useCallback(() => {
     setLogs([]);
+    sendMessage("agent:reset").catch(() => {});
+  }, []);
+
+  const handleApprove = useCallback((toolCallId: string) => {
+    sendMessage("agent:approve");
+    setLogs((prev) => prev.map((log) =>
+      log.toolCallId === toolCallId ? { ...log, permissionResolved: true } : log
+    ));
+  }, []);
+
+  const handleReject = useCallback((toolCallId: string) => {
+    sendMessage("agent:reject");
+    setLogs((prev) => prev.map((log) =>
+      log.toolCallId === toolCallId ? { ...log, permissionResolved: true } : log
+    ));
   }, []);
 
   const handlePickElement = useCallback(async () => {
@@ -254,12 +388,12 @@ export default function App() {
 
   const handleCancelPick = useCallback(() => {
     sendMessage("pick:cancel").catch(() => {});
-    // pick:start 的轮询会在下次检测到 null 时返回
   }, []);
 
   const handleDismissLog = useCallback((logId: number) => {
     setLogs((prev) => prev.filter((l) => l.id !== logId));
   }, []);
+
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -273,6 +407,8 @@ export default function App() {
     setAttachments((prev) => [...prev, ...newAttachments]);
     e.target.value = "";
   }, []);
+
+  const stepCount = logs.filter((l) => l.type !== "user").length;
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -290,42 +426,56 @@ export default function App() {
           </Tooltip>
           <Tooltip title={attached ? "断开 CDP" : "连接 CDP"}>
             <IconButton size="small" onClick={handleAttach}>
-              {attached ? (
-                <LinkIcon color="success" />
-              ) : (
-                <LinkOffIcon color="disabled" />
-              )}
+              {attached ? <LinkIcon color="success" /> : <LinkOffIcon color="disabled" />}
             </IconButton>
           </Tooltip>
           <Tooltip title="设置">
-            <IconButton
-              size="small"
-              onClick={() => chrome.runtime.openOptionsPage()}
-            >
+            <IconButton size="small" onClick={() => chrome.runtime.openOptionsPage()}>
               <SettingsIcon />
             </IconButton>
           </Tooltip>
         </Toolbar>
       </AppBar>
 
-      {/* 日志区 */}
+      {/* 步骤区 */}
       <Box sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
-        {logs.map((log) => (
-          <LogItem key={log.id} entry={log} onDismiss={handleDismissLog} />
+        {stepCount > 0 && (
+          <Typography variant="caption" sx={{ opacity: 0.5, mb: 1.5, display: "block" }}>
+            {stepCount} steps
+          </Typography>
+        )}
+        {logs.map((entry, i) => (
+          <StepItem
+            key={entry.id}
+            entry={entry}
+            showTopLine={i > 0 && entry.type !== "user" && logs[i - 1]?.type !== "user"}
+            showBottomLine={i < logs.length - 1 && entry.type !== "user" && logs[i + 1]?.type !== "user"}
+            onApprove={handleApprove}
+            onReject={handleReject}
+            onDismiss={handleDismissLog}
+          />
         ))}
         <div ref={logsEndRef} />
       </Box>
 
-      {/* 底栏 — 输入框 + 工具行 */}
+      {/* 底栏 */}
       <Box sx={{ p: 1.5, pt: 0 }}>
-        <Paper
-          variant="outlined"
-          sx={{
-            borderRadius: 3,
-            overflow: "hidden",
-          }}
-        >
-          {/* 附加 Chip 区域 */}
+        {autoMode && (
+          <Paper
+            variant="outlined"
+            sx={{
+              px: 1.5, py: 0.75, mb: 1, borderRadius: 2,
+              bgcolor: "warning.dark", borderColor: "warning.main",
+            }}
+          >
+            <Typography variant="caption" sx={{ color: "warning.contrastText" }}>
+              ⚠ Auto 模式：NekoPilot 将直接执行所有操作，不会询问确认。
+            </Typography>
+          </Paper>
+        )}
+
+        <Paper variant="outlined" sx={{ borderRadius: 3, overflow: "hidden" }}>
+          {/* 附加 Chip */}
           {(picking || pickedElements.length > 0 || attachments.length > 0) && (
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, px: 1.5, pt: 1, pb: 0 }}>
               {picking && (
@@ -366,7 +516,7 @@ export default function App() {
             </Box>
           )}
 
-          {/* 输入区域 */}
+          {/* 输入 */}
           <InputBase
             fullWidth
             multiline
@@ -384,32 +534,21 @@ export default function App() {
             }}
           />
 
-          {/* 底部工具行 */}
-          <Stack
-            direction="row"
-            alignItems="center"
-            sx={{ px: 1, pb: 0.5, pt: 0 }}
-          >
-            {/* 权限模式选择器 */}
+          {/* 工具行 */}
+          <Stack direction="row" alignItems="center" sx={{ px: 1, pb: 0.5, pt: 0 }}>
             <Box
               onClick={(e) => setModeMenuAnchor(e.currentTarget)}
               sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 0.5,
-                cursor: "pointer",
-                px: 1,
-                py: 0.5,
-                borderRadius: 1,
-                "&:hover": { bgcolor: "action.hover" },
-                userSelect: "none",
+                display: "flex", alignItems: "center", gap: 0.5,
+                cursor: "pointer", px: 1, py: 0.5, borderRadius: 1,
+                "&:hover": { bgcolor: "action.hover" }, userSelect: "none",
               }}
             >
               {autoMode
                 ? <DoubleArrowIcon sx={{ fontSize: 16, opacity: 0.7 }} />
                 : <PanToolAltIcon sx={{ fontSize: 16, opacity: 0.7 }} />}
               <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                {autoMode ? "Act without asking" : "Ask before acting"}
+                {autoMode ? "Auto mode" : "Ask before acting"}
               </Typography>
               <KeyboardArrowDownIcon sx={{ fontSize: 14, opacity: 0.5 }} />
             </Box>
@@ -423,17 +562,17 @@ export default function App() {
               slotProps={{ paper: { sx: { minWidth: 0 } }, list: { dense: true } }}
             >
               <MenuItem
-                onClick={() => { setAutoMode(true); setModeMenuAnchor(null); }}
+                onClick={() => { setAutoModeAndPersist(true); setModeMenuAnchor(null); }}
                 selected={autoMode}
                 sx={{ py: 0.5 }}
               >
                 <ListItemIcon sx={{ minWidth: 28 }}>
                   <DoubleArrowIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText primaryTypographyProps={{ variant: "body2" }}>Act without asking</ListItemText>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }}>Auto mode</ListItemText>
               </MenuItem>
               <MenuItem
-                onClick={() => { setAutoMode(false); setModeMenuAnchor(null); }}
+                onClick={() => { setAutoModeAndPersist(false); setModeMenuAnchor(null); }}
                 selected={!autoMode}
                 sx={{ py: 0.5 }}
               >
@@ -446,28 +585,15 @@ export default function App() {
 
             <Box sx={{ flexGrow: 1 }} />
 
-            {/* 右侧操作按钮 */}
             <Tooltip title={picking ? "正在选择..." : "选择页面元素"}>
-              <IconButton
-                size="small"
-                onClick={handlePickElement}
-                disabled={picking}
-                color={picking ? "primary" : "default"}
-              >
+              <IconButton size="small" onClick={handlePickElement} disabled={picking} color={picking ? "primary" : "default"}>
                 <NearMeIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Tooltip>
             <Tooltip title="添加附件">
               <IconButton size="small" component="label">
                 <AttachFileIcon sx={{ fontSize: 18 }} />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  hidden
-                  accept="image/*,.pdf,.txt,.json,.csv"
-                  multiple
-                  onChange={handleFileChange}
-                />
+                <input ref={fileInputRef} type="file" hidden accept="image/*,.pdf,.txt,.json,.csv" multiple onChange={handleFileChange} />
               </IconButton>
             </Tooltip>
             {running ? (
@@ -478,12 +604,7 @@ export default function App() {
               </Tooltip>
             ) : (
               <Tooltip title="发送消息">
-                <IconButton
-                  size="small"
-                  onClick={handleSend}
-                  disabled={!input.trim() && pickedElements.length === 0}
-                  color="primary"
-                >
+                <IconButton size="small" onClick={handleSend} disabled={!input.trim() && pickedElements.length === 0} color="primary">
                   <SendIcon sx={{ fontSize: 18 }} />
                 </IconButton>
               </Tooltip>
@@ -495,65 +616,193 @@ export default function App() {
   );
 }
 
-// ── 日志条目组件 ──
+// ── 步骤时间线组件 ──
 
-const typeConfig: Record<
-  LogEntry["type"],
-  { label: string; color: "default" | "primary" | "secondary" | "success" | "warning" | "error" | "info" }
-> = {
-  user: { label: "You", color: "primary" },
-  assistant: { label: "NekoPilot", color: "secondary" },
-  thinking: { label: "思考", color: "info" },
-  tool_call: { label: "工具调用", color: "warning" },
-  tool_result: { label: "工具结果", color: "success" },
-  error: { label: "错误", color: "error" },
-};
+function StepItem({
+  entry,
+  showTopLine,
+  showBottomLine,
+  onApprove,
+  onReject,
+  onDismiss,
+}: {
+  entry: LogEntry;
+  showTopLine: boolean;
+  showBottomLine: boolean;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  onDismiss: (id: number) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
 
-function LogItem({ entry, onDismiss }: { entry: LogEntry; onDismiss?: (id: number) => void }) {
-  const config = typeConfig[entry.type];
-  const isUser = entry.type === "user";
-  const isError = entry.type === "error";
+  // 用户消息 — 独立块
+  if (entry.type === "user") {
+    return (
+      <Box sx={{ mb: 2, mt: 1 }}>
+        <Paper
+          sx={{
+            p: 1.5, bgcolor: "primary.dark", borderRadius: 2,
+            whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}
+        >
+          <Typography variant="body2">{entry.content}</Typography>
+        </Paper>
+      </Box>
+    );
+  }
+
+  // 其他类型 — 时间线
+  const icon = getStepIcon(entry);
 
   return (
-    <Box sx={{ mb: 1, display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
-      <Chip label={config.label} color={config.color} size="small" sx={{ mb: 0.5 }} />
-      <Paper
-        variant="outlined"
+    <Box sx={{ display: "flex" }}>
+      {/* 时间线列 */}
+      <Box
         sx={{
-          p: 1,
-          maxWidth: "95%",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          fontSize: "0.82rem",
-          lineHeight: 1.5,
-          bgcolor: isUser ? "primary.dark" : "background.paper",
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 0.5,
+          width: 24, display: "flex", flexDirection: "column",
+          alignItems: "center", flexShrink: 0,
         }}
       >
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          {entry.type === "tool_call" || entry.type === "tool_result" ? (
-            <Typography
-              component="pre"
-              variant="body2"
-              sx={{ fontFamily: "monospace", fontSize: "0.78rem", m: 0 }}
-            >
+        <Box sx={{ width: 1.5, height: 8, bgcolor: showTopLine ? "divider" : "transparent", flexShrink: 0 }} />
+        {icon}
+        <Box sx={{ width: 1.5, flex: 1, bgcolor: showBottomLine ? "divider" : "transparent" }} />
+      </Box>
+
+      {/* 内容列 */}
+      <Box sx={{ flex: 1, minWidth: 0, pb: 1.5, pl: 1 }}>
+        {entry.type === "assistant" && (
+          <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6 }}>
+            {entry.content}
+          </Typography>
+        )}
+
+        {entry.type === "thinking" && (
+          <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", opacity: 0.6, fontStyle: "italic", lineHeight: 1.6 }}>
+            {entry.content}
+          </Typography>
+        )}
+
+        {entry.type === "tool_call" && (
+          <ToolCallStep
+            entry={entry}
+            expanded={expanded}
+            onToggle={() => setExpanded(!expanded)}
+            onApprove={onApprove}
+            onReject={onReject}
+          />
+        )}
+
+        {entry.type === "error" && (
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+            <Typography variant="body2" sx={{ color: "error.main", flex: 1, lineHeight: 1.6 }}>
               {entry.content}
             </Typography>
-          ) : (
-            <Typography variant="body2">{entry.content}</Typography>
-          )}
-          {entry.type === "thinking" && (
-            <CircularProgress size={14} sx={{ ml: 1 }} />
-          )}
-        </Box>
-        {isError && onDismiss && (
-          <IconButton size="small" onClick={() => onDismiss(entry.id)} sx={{ ml: 0.5, mt: -0.5 }}>
-            <CloseIcon sx={{ fontSize: 14 }} />
-          </IconButton>
+            <IconButton size="small" onClick={() => onDismiss(entry.id)} sx={{ mt: -0.5 }}>
+              <CloseIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Box>
         )}
-      </Paper>
+      </Box>
+    </Box>
+  );
+}
+
+// ── 工具调用步骤 ──
+
+function ToolCallStep({
+  entry,
+  expanded,
+  onToggle,
+  onApprove,
+  onReject,
+}: {
+  entry: LogEntry;
+  expanded: boolean;
+  onToggle: () => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+}) {
+  const hasResult = entry.toolResult !== undefined;
+  const isScreenshot = entry.toolName === "screenshot";
+  const isPending = !hasResult && entry.needsPermission && !entry.permissionResolved;
+  const isExecuting = !hasResult && (!entry.needsPermission || entry.permissionResolved);
+
+  return (
+    <Box>
+      {/* 操作标签 */}
+      <Box
+        onClick={hasResult && !isScreenshot ? onToggle : undefined}
+        sx={{
+          display: "flex", alignItems: "center", gap: 0.75,
+          cursor: hasResult && !isScreenshot ? "pointer" : "default",
+          "&:hover": hasResult && !isScreenshot ? { opacity: 0.8 } : {},
+        }}
+      >
+        <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary" }}>
+          {getToolLabel(entry.toolName)}
+        </Typography>
+
+        {isExecuting && <CircularProgress size={12} />}
+
+        {hasResult && entry.toolSuccess && (
+          <CheckCircleOutlineIcon sx={{ fontSize: 14, color: "success.main" }} />
+        )}
+        {hasResult && !entry.toolSuccess && (
+          <ErrorOutlineIcon sx={{ fontSize: 14, color: "error.main" }} />
+        )}
+
+        {hasResult && !isScreenshot && (
+          <ExpandMoreIcon
+            sx={{
+              fontSize: 16,
+              transform: expanded ? "rotate(180deg)" : "none",
+              transition: "transform 0.2s",
+              opacity: 0.4,
+            }}
+          />
+        )}
+      </Box>
+
+      {/* 截图缩略图 */}
+      {isScreenshot && entry.screenshotData && (
+        <Box
+          component="img"
+          src={`data:image/png;base64,${entry.screenshotData}`}
+          sx={{
+            width: 80, height: 50, objectFit: "cover",
+            borderRadius: 1, mt: 0.5, border: 1, borderColor: "divider", display: "block",
+          }}
+        />
+      )}
+
+      {/* 权限确认 */}
+      {isPending && (
+        <Stack direction="row" gap={1} sx={{ mt: 0.75 }}>
+          <Button size="small" variant="outlined" onClick={() => onApprove(entry.toolCallId!)}>
+            允许
+          </Button>
+          <Button size="small" variant="outlined" color="error" onClick={() => onReject(entry.toolCallId!)}>
+            拒绝
+          </Button>
+        </Stack>
+      )}
+
+      {/* 可折叠结果 */}
+      {hasResult && !isScreenshot && (
+        <Collapse in={expanded}>
+          <Typography
+            component="pre"
+            variant="caption"
+            sx={{
+              fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all",
+              opacity: 0.6, mt: 0.5, maxHeight: 200, overflow: "auto",
+              fontSize: "0.72rem", lineHeight: 1.4,
+            }}
+          >
+            {entry.toolResult}
+          </Typography>
+        </Collapse>
+      )}
     </Box>
   );
 }

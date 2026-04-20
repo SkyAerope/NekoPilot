@@ -29,6 +29,7 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 export class AgentLoop {
   private messages: ChatMessage[] = [];
   private aborted = false;
+  private permissionResolve: ((approved: boolean) => void) | null = null;
 
   constructor(
     private tools: ToolExecutor,
@@ -38,32 +39,54 @@ export class AgentLoop {
 
   abort(): void {
     this.aborted = true;
+    if (this.permissionResolve) {
+      this.permissionResolve(false);
+      this.permissionResolve = null;
+    }
   }
 
-  async run(userMessage: string): Promise<string> {
+  resolvePermission(approved: boolean): void {
+    if (this.permissionResolve) {
+      this.permissionResolve(approved);
+      this.permissionResolve = null;
+    }
+  }
+
+  async run(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
     this.messages = [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userMessage },
+      ...history,
     ];
 
     for (let i = 0; i < this.config.maxIterations; i++) {
       if (this.aborted) {
         this.emit({ type: "done", data: "Agent was stopped." });
-        return "Agent was stopped.";
+        return { text: "Agent was stopped.", messages: this.messages.slice(1) };
       }
 
-      const response = await this.callLlm();
+      let response: ChatMessage;
+      try {
+        response = await this.callLlm();
+      } catch (err) {
+        const errorMsg = String(err);
+        this.emit({ type: "error", data: errorMsg });
+        this.emit({ type: "done", data: errorMsg });
+        return { text: errorMsg, messages: this.messages.slice(1) };
+      }
 
       // 如果没有 tool_calls，说明 agent 回复了最终结果
       if (!response.tool_calls || response.tool_calls.length === 0) {
         const text = response.content ?? "";
+        this.messages.push({ role: "assistant", content: text });
         this.emit({ type: "message", data: text });
         this.emit({ type: "done", data: text });
-        return text;
+        return { text, messages: this.messages.slice(1) };
       }
 
       // 有 tool_calls，执行
-      this.emit({ type: "thinking", data: response.content });
+      if (response.content) {
+        this.emit({ type: "thinking", data: response.content });
+      }
       this.messages.push(response);
 
       for (const toolCall of response.tool_calls) {
@@ -74,7 +97,7 @@ export class AgentLoop {
 
     const msg = "达到最大迭代次数，Agent 停止。";
     this.emit({ type: "done", data: msg });
-    return msg;
+    return { text: msg, messages: this.messages.slice(1) };
   }
 
   private async callLlm(): Promise<ChatMessage> {
@@ -110,8 +133,21 @@ export class AgentLoop {
 
     this.emit({
       type: "tool_call",
-      data: { name, args: argsStr, id: toolCall.id },
+      data: { name, args: argsStr, id: toolCall.id, needsPermission: this.config.permissionMode === "ask" },
     });
+
+    // 在 ask 模式下等待用户确认
+    if (this.config.permissionMode === "ask") {
+      const approved = await new Promise<boolean>((resolve) => {
+        this.permissionResolve = resolve;
+      });
+      if (!approved) {
+        const rejected = { success: false, error: "用户拒绝了此操作" };
+        this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });
+        this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(rejected) });
+        return;
+      }
+    }
 
     let params: Record<string, unknown>;
     try {
