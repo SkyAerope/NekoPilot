@@ -17,6 +17,8 @@ import {
   ListItemText,
   Autocomplete,
   CircularProgress,
+  FormControlLabel,
+  Switch,
 } from "@mui/material";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import LightModeIcon from "@mui/icons-material/LightMode";
@@ -32,6 +34,7 @@ interface Settings {
   model: string;
   provider: string;
   elementTextLimit: number;
+  showClickMarker: boolean;
 }
 
 const defaultSettings: Settings = {
@@ -40,6 +43,7 @@ const defaultSettings: Settings = {
   model: "gpt-4o",
   provider: "openai",
   elementTextLimit: 128,
+  showClickMarker: true,
 };
 
 const providerPresets: Record<string, { baseUrl: string }> = {
@@ -241,6 +245,19 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
               helperText="选择页面元素时，截取元素文本的最大字符数（默认 128）"
               slotProps={{ htmlInput: { min: 1, max: 10000 } }}
             />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.showClickMarker}
+                  onChange={(e) => updateSettings({ showClickMarker: e.target.checked })}
+                />
+              }
+              label="Click 操作时标记坐标位置"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+              在 Ask 模式下，Click 等待审批时在页面上显示点击位置标记
+            </Typography>
           </Stack>
         </Paper>
       </Stack>

@@ -6,6 +6,7 @@ export interface AgentConfig {
   model: string;
   maxIterations: number;
   permissionMode: "ask" | "auto";
+  showClickMarker: boolean;
 }
 
 export type AgentEventType =

@@ -234,9 +234,28 @@ export class AgentLoop {
 
     // 在 ask 模式下，仅对非只读工具等待用户确认
     if (needsPermission) {
+      // click 工具显示坐标标记
+      let showedMarker = false;
+      if (name === "click" && this.config.showClickMarker) {
+        try {
+          const args = JSON.parse(argsStr);
+          const x = args.x as number | undefined;
+          const y = args.y as number | undefined;
+          if (x !== undefined && y !== undefined) {
+            await this.tools.showClickMarker(x, y);
+            showedMarker = true;
+          }
+        } catch { /* 解析失败忽略 */ }
+      }
+
       const approved = await new Promise<boolean>((resolve) => {
         this.permissionResolve = resolve;
       });
+
+      if (showedMarker) {
+        await this.tools.removeClickMarker().catch(() => {});
+      }
+
       if (!approved) {
         const rejected = { success: false, error: "用户拒绝了此操作" };
         this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });

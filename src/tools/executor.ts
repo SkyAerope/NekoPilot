@@ -79,6 +79,40 @@ export class ToolExecutor {
     }
   }
 
+  // ── Click 坐标标记 ──
+
+  async showClickMarker(x: number, y: number): Promise<void> {
+    const expression = `
+      (function() {
+        let m = document.getElementById('__nekopilot-click-marker');
+        if (m) m.remove();
+        m = document.createElement('div');
+        m.id = '__nekopilot-click-marker';
+        m.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+          + 'left:' + (${x} - 12) + 'px;top:' + (${y} - 12) + 'px;'
+          + 'width:24px;height:24px;border-radius:50%;'
+          + 'border:2px solid #ef4444;background:rgba(239,68,68,0.2);'
+          + 'box-shadow:0 0 0 4px rgba(239,68,68,0.1);'
+          + 'animation:__neko-pulse 1s ease-in-out infinite;';
+        const style = document.createElement('style');
+        style.id = '__nekopilot-click-marker-style';
+        style.textContent = '@keyframes __neko-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:0.6}}';
+        document.head.appendChild(style);
+        const dot = document.createElement('div');
+        dot.style.cssText = 'position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;background:#ef4444;transform:translate(-50%,-50%);';
+        m.appendChild(dot);
+        document.body.appendChild(m);
+      })()
+    `;
+    await this.cdp.send("Runtime.evaluate", { expression });
+  }
+
+  async removeClickMarker(): Promise<void> {
+    await this.cdp.send("Runtime.evaluate", {
+      expression: "document.getElementById('__nekopilot-click-marker')?.remove();document.getElementById('__nekopilot-click-marker-style')?.remove();",
+    });
+  }
+
   // ── 具体 Tool 实现 ──
 
   private async screenshot(): Promise<string> {
@@ -93,12 +127,11 @@ export class ToolExecutor {
     const expression = `
       (function() {
         const full = document.body.innerText;
-        return JSON.stringify({
-          text: full.slice(${offset}, ${offset} + ${limit}),
-          totalLength: full.length,
-          offset: ${offset},
-          limit: ${limit},
-        });
+        const text = full.slice(${offset}, ${offset} + ${limit});
+        return 'text: |\n  ' + text.replace(/\n/g, '\n  ')
+          + '\ntotalLength: ' + full.length
+          + '\noffset: ' + ${offset}
+          + '\nlimit: ' + ${limit};
       })()
     `;
     const result = await this.cdp.send<{ result: { value: string } }>(
@@ -122,14 +155,32 @@ export class ToolExecutor {
             .map(c => simplify(c, depth + 1))
             .filter(Boolean);
           if (!role && !text && children.length === 0 && !['input','button','a','select','textarea','img'].includes(tag)) return null;
-          return {
-            tag, role, text,
+          return { tag, role, text,
             ref: tag + '[' + Array.from(el.parentElement?.children || []).indexOf(el) + ']',
             rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
             children: children.length ? children : undefined
           };
         }
-        return JSON.stringify(simplify(document.body, 0), null, 2);
+        function toYaml(obj, indent) {
+          if (obj === null || obj === undefined) return 'null';
+          const pad = '  '.repeat(indent);
+          if (Array.isArray(obj)) {
+            if (obj.length === 0) return '[]';
+            return obj.map(item => pad + '- ' + toYaml(item, indent + 1).trimStart()).join('\n');
+          }
+          if (typeof obj === 'object') {
+            const entries = Object.entries(obj).filter(([,v]) => v !== undefined && v !== '');
+            if (entries.length === 0) return '{}';
+            return entries.map(([k, v]) => {
+              if (typeof v === 'object' && v !== null) {
+                return pad + k + ':\n' + toYaml(v, indent + 1);
+              }
+              return pad + k + ': ' + v;
+            }).join('\n');
+          }
+          return String(obj);
+        }
+        return toYaml(simplify(document.body, 0), 0);
       })()
     `;
     const result = await this.cdp.send<{ result: { value: string } }>(
@@ -144,22 +195,26 @@ export class ToolExecutor {
       (function() {
         const selectors = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [tabindex]';
         const elements = document.querySelectorAll(selectors);
-        const results = [];
+        const lines = [];
         elements.forEach((el, i) => {
           const rect = el.getBoundingClientRect();
           if (rect.width === 0 && rect.height === 0) return;
-          results.push({
-            ref: 'interactive[' + i + ']',
-            tag: el.tagName.toLowerCase(),
-            type: el.getAttribute('type') || '',
-            role: el.getAttribute('role') || '',
-            text: (el.textContent || '').trim().slice(0, 80),
-            placeholder: el.getAttribute('placeholder') || '',
-            value: el.value || '',
-            rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
-          });
+          const tag = el.tagName.toLowerCase();
+          const type = el.getAttribute('type') || '';
+          const role = el.getAttribute('role') || '';
+          const text = (el.textContent || '').trim().slice(0, 80);
+          const ph = el.getAttribute('placeholder') || '';
+          const val = el.value || '';
+          lines.push('- ref: interactive[' + i + ']');
+          lines.push('  tag: ' + tag);
+          if (type) lines.push('  type: ' + type);
+          if (role) lines.push('  role: ' + role);
+          if (text) lines.push('  text: ' + text);
+          if (ph) lines.push('  placeholder: ' + ph);
+          if (val) lines.push('  value: ' + val);
+          lines.push('  rect: ' + rect.x.toFixed(0) + ',' + rect.y.toFixed(0) + ',' + rect.width.toFixed(0) + 'x' + rect.height.toFixed(0));
         });
-        return JSON.stringify(results, null, 2);
+        return lines.join('\n');
       })()
     `;
     const result = await this.cdp.send<{ result: { value: string } }>(
@@ -300,15 +355,10 @@ export class ToolExecutor {
           let selector = el.tagName.toLowerCase();
           if (el.id) selector = '#' + el.id;
           else if (el.className && typeof el.className === 'string') selector += '.' + el.className.trim().split(/\\s+/).join('.');
-          results.push({
-            tag: el.tagName.toLowerCase(),
-            text: (el.textContent || '').trim().slice(0, 120),
-            selector: selector,
-            rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
-          });
+          results.push({ tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().slice(0, 120), selector, rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } });
           if (results.length >= limit) break;
         }
-        return JSON.stringify(results, null, 2);
+        return results.map(r => '- tag: ' + r.tag + '\n  text: ' + r.text + '\n  selector: ' + r.selector + '\n  rect: ' + r.rect.x + ',' + r.rect.y + ',' + r.rect.w + 'x' + r.rect.h).join('\n');
       })()
     `;
     const result = await this.cdp.send<{ result: { value: string } }>(
@@ -326,14 +376,13 @@ export class ToolExecutor {
     const expression = `
       (function() {
         const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return JSON.stringify({ error: 'Element not found' });
+        if (!el) return 'error: Element not found';
         const full = (el.textContent || '').trim();
-        return JSON.stringify({
-          text: full.slice(${offset}, ${offset} + ${limit}),
-          totalLength: full.length,
-          offset: ${offset},
-          limit: ${limit},
-        });
+        const text = full.slice(${offset}, ${offset} + ${limit});
+        return 'text: |\n  ' + text.replace(/\n/g, '\n  ')
+          + '\ntotalLength: ' + full.length
+          + '\noffset: ' + ${offset}
+          + '\nlimit: ' + ${limit};
       })()
     `;
     const result = await this.cdp.send<{ result: { value: string } }>(
