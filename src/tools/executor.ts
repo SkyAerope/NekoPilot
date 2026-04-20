@@ -278,7 +278,8 @@ export class ToolExecutor {
             if (text) lines.push('  text: ' + text);
             if (ph) lines.push('  placeholder: ' + ph);
             if (val) lines.push('  value: ' + val);
-            lines.push('  rect: ' + rect.x.toFixed(0) + ',' + rect.y.toFixed(0) + ',' + rect.width.toFixed(0) + 'x' + rect.height.toFixed(0));
+            lines.push('  position: { x: ' + rect.x.toFixed(0) + ', y: ' + rect.y.toFixed(0) + ', width: ' + rect.width.toFixed(0) + ', height: ' + rect.height.toFixed(0) + ' }');
+            lines.push('  center: { x: ' + (rect.x + rect.width / 2).toFixed(0) + ', y: ' + (rect.y + rect.height / 2).toFixed(0) + ' }');
           } catch(e) { /* 跳过异常元素 */ }
         });
         if (lines.length === 0) return 'no_results: 当前页面没有可见的可交互元素';
@@ -452,7 +453,15 @@ export class ToolExecutor {
         }
 
         if (results.length === 0) return 'no_results: 未找到包含 "' + ${JSON.stringify(text)} + '" 的可见元素';
-        return results.map(r => '- tag: ' + r.tag + '\\n  text: ' + r.text + '\\n  selector: ' + r.selector + '\\n  rect: ' + r.rect.x + ',' + r.rect.y + ',' + r.rect.w + 'x' + r.rect.h).join('\\n');
+        return results.map(r => {
+          var cx = r.rect.x + Math.round(r.rect.w / 2);
+          var cy = r.rect.y + Math.round(r.rect.h / 2);
+          return '- tag: ' + r.tag
+            + '\\n  text: ' + r.text
+            + '\\n  selector: ' + r.selector
+            + '\\n  position: { x: ' + r.rect.x + ', y: ' + r.rect.y + ', width: ' + r.rect.w + ', height: ' + r.rect.h + ' }'
+            + '\\n  center: { x: ' + cx + ', y: ' + cy + ' }';
+        }).join('\\n');
       })()
     `;
     return this.evaluate(expression);

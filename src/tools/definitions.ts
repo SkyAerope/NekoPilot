@@ -33,7 +33,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "read_page_interactive",
     description:
-      "读取当前页面中所有可交互元素（input/button/a/select 等），包含位置和 ref。",
+      "读取当前页面中所有可见的可交互元素（a/button/input/select/textarea/[role]/[onclick] 等）。每项包含：selector（可直接用于 click/set_input 的 CSS 选择器）、tag、type、role、text、placeholder、value、position（视口坐标与尺寸）、center（中心点坐标，可作 click 的 x/y）。",
     parameters: {},
   },
   {
@@ -102,7 +102,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "find_element",
     description:
-      "根据文本内容搜索页面中的元素。返回匹配元素的列表，包含 tag、text（截断）、selector 和坐标。",
+      "根据文本内容搜索页面中的元素。返回匹配元素列表，每项包含：tag（标签名）、text（截断文本）、selector（可直接用于 click/set_input 的 CSS 选择器）、position（元素在视口内的位置与尺寸，单位 px）、center（元素中心点坐标，可直接作为 click 的 x/y）。",
     parameters: {
       text: {
         type: "string",

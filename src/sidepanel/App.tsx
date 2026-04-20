@@ -309,9 +309,15 @@ export default function App() {
         setLogs((prev) => prev.map((log) => {
           if (log.type === "tool_call" && log.toolCallId === data.id) {
             const resultData = data.result.data ?? data.result.error;
+            // 字符串结果直接保留（避免 JSON.stringify 把 \n 转义为字面量）
+            const formatted = resultData === undefined
+              ? "done"
+              : typeof resultData === "string"
+                ? resultData
+                : JSON.stringify(resultData, null, 2);
             return {
               ...log,
-              toolResult: resultData !== undefined ? JSON.stringify(resultData, null, 2) : "done",
+              toolResult: formatted,
               toolSuccess: data.result.success,
               screenshotData: data.name === "screenshot" && data.result.success ? String(data.result.data) : undefined,
             };
