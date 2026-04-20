@@ -203,7 +203,7 @@ export class ToolExecutor {
           const tag = el.tagName.toLowerCase();
           const role = el.getAttribute('role') || '';
           const text = el.childNodes.length === 1 && el.childNodes[0].nodeType === 3
-            ? el.childNodes[0].textContent?.trim().slice(0, 80) : '';
+            ? (function() { var t = el.childNodes[0].textContent?.trim() || ''; return t.length > 80 ? t.slice(0, 80) + '...(+' + (t.length - 80) + ' chars)' : t; })() : '';
           const children = Array.from(el.children)
             .map(c => simplify(c, depth + 1))
             .filter(Boolean);
@@ -252,7 +252,8 @@ export class ToolExecutor {
             const tag = el.tagName.toLowerCase();
             const type = el.getAttribute('type') || '';
             const role = el.getAttribute('role') || '';
-            const text = (el.textContent || '').trim().slice(0, 80);
+            const rawText = (el.textContent || '').trim();
+            const text = rawText.length > 80 ? rawText.slice(0, 80) + '...(+' + (rawText.length - 80) + ' chars)' : rawText;
             const ph = el.getAttribute('placeholder') || '';
             const val = ('value' in el && typeof el.value === 'string') ? el.value : '';
             lines.push('- ref: interactive[' + i + ']');
@@ -397,7 +398,9 @@ export class ToolExecutor {
           let selector = el.tagName.toLowerCase();
           if (el.id) selector = '#' + el.id;
           else if (el.className && typeof el.className === 'string') selector += '.' + el.className.trim().split(/\\s+/).join('.');
-          results.push({ tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().slice(0, 120), selector, rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } });
+          const rawText = (el.textContent || '').trim();
+          const textDisplay = rawText.length > 120 ? rawText.slice(0, 120) + '...(+' + (rawText.length - 120) + ' chars)' : rawText;
+          results.push({ tag: el.tagName.toLowerCase(), text: textDisplay, selector, rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } });
         }
 
         // 1. TreeWalker 遍历所有文本节点
