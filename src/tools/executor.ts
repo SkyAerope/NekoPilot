@@ -57,6 +57,19 @@ export class ToolExecutor {
         return this.navigate(params.url as string);
       case "wait":
         return this.wait(params.ms as number);
+      case "find_element":
+        return this.findElement(
+          params.text as string,
+          (params.limit as number) ?? 10
+        );
+      case "get_element_text":
+        return this.getElementText(
+          params.selector as string,
+          (params.limit as number) ?? 2048,
+          (params.offset as number) ?? 0
+        );
+      case "get_element_rect":
+        return this.getElementRect(params.selector as string);
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -223,5 +236,95 @@ export class ToolExecutor {
 
   private async wait(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async findElement(
+    text: string,
+    limit: number
+  ): Promise<string> {
+    const expression = `
+      (function() {
+        const text = ${JSON.stringify(text)}.toLowerCase();
+        const limit = ${limit};
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const seen = new Set();
+        const results = [];
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (!node.textContent?.toLowerCase().includes(text)) continue;
+          const el = node.parentElement;
+          if (!el || seen.has(el)) continue;
+          seen.add(el);
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          let selector = el.tagName.toLowerCase();
+          if (el.id) selector = '#' + el.id;
+          else if (el.className && typeof el.className === 'string') selector += '.' + el.className.trim().split(/\\s+/).join('.');
+          results.push({
+            tag: el.tagName.toLowerCase(),
+            text: (el.textContent || '').trim().slice(0, 120),
+            selector: selector,
+            rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
+          });
+          if (results.length >= limit) break;
+        }
+        return JSON.stringify(results, null, 2);
+      })()
+    `;
+    const result = await this.cdp.send<{ result: { value: string } }>(
+      "Runtime.evaluate",
+      { expression, returnByValue: true }
+    );
+    return result.result.value;
+  }
+
+  private async getElementText(
+    selector: string,
+    limit: number,
+    offset: number
+  ): Promise<string> {
+    const expression = `
+      (function() {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return JSON.stringify({ error: 'Element not found' });
+        const full = (el.textContent || '').trim();
+        return JSON.stringify({
+          text: full.slice(${offset}, ${offset} + ${limit}),
+          totalLength: full.length,
+          offset: ${offset},
+          limit: ${limit},
+        });
+      })()
+    `;
+    const result = await this.cdp.send<{ result: { value: string } }>(
+      "Runtime.evaluate",
+      { expression, returnByValue: true }
+    );
+    return result.result.value;
+  }
+
+  private async getElementRect(selector: string): Promise<string> {
+    const expression = `
+      (function() {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return JSON.stringify({ error: 'Element not found' });
+        const rect = el.getBoundingClientRect();
+        return JSON.stringify({
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          top: Math.round(rect.top),
+          right: Math.round(rect.right),
+          bottom: Math.round(rect.bottom),
+          left: Math.round(rect.left),
+        });
+      })()
+    `;
+    const result = await this.cdp.send<{ result: { value: string } }>(
+      "Runtime.evaluate",
+      { expression, returnByValue: true }
+    );
+    return result.result.value;
   }
 }

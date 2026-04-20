@@ -90,4 +90,52 @@ export const toolDefinitions: ToolDefinition[] = [
     },
     required: ["ms"],
   },
+  {
+    name: "find_element",
+    description:
+      "根据文本内容搜索页面中的元素。返回匹配元素的列表，包含 tag、text（截断）、selector 和坐标。",
+    parameters: {
+      text: {
+        type: "string",
+        description: "要搜索的文本内容（支持部分匹配）",
+      },
+      limit: {
+        type: "integer",
+        description: "最多返回的匹配结果数，默认 10",
+      },
+    },
+    required: ["text"],
+  },
+  {
+    name: "get_element_text",
+    description:
+      "获取指定元素的文本内容。可通过 limit 和 offset 控制返回的文本范围。",
+    parameters: {
+      selector: {
+        type: "string",
+        description: "目标元素的 CSS 选择器",
+      },
+      limit: {
+        type: "integer",
+        description: "返回文本的最大字符数，默认 2048",
+      },
+      offset: {
+        type: "integer",
+        description: "文本起始偏移量（字符数），默认 0",
+      },
+    },
+    required: ["selector"],
+  },
+  {
+    name: "get_element_rect",
+    description:
+      "获取指定元素的坐标和尺寸信息（x, y, width, height）。",
+    parameters: {
+      selector: {
+        type: "string",
+        description: "目标元素的 CSS 选择器",
+      },
+    },
+    required: ["selector"],
+  },
 ];

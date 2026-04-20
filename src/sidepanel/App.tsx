@@ -65,6 +65,7 @@ export default function App() {
   const [picking, setPicking] = useState(false);
   const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [elementTextLimit, setElementTextLimit] = useState(128);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -97,6 +98,14 @@ export default function App() {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  useEffect(() => {
+    chrome.storage.local.get("settings", (data) => {
+      if (data.settings?.elementTextLimit != null) {
+        setElementTextLimit(data.settings.elementTextLimit);
+      }
+    });
+  }, []);
 
   // 检查连接状态
   useEffect(() => {
@@ -207,8 +216,15 @@ export default function App() {
   const handlePickElement = useCallback(async () => {
     if (picking) return;
     setPicking(true);
+    const pickingLogId = ++logIdCounter;
+    setLogs((prev) => [
+      ...prev,
+      { id: pickingLogId, type: "thinking", content: "正在选择页面元素，点击元素选中，按 ESC 取消...", timestamp: Date.now() },
+    ]);
     try {
       const result = await sendMessage<{ element: Record<string, unknown> | null; timeout?: boolean }>("pick:start");
+      // 移除选择中提示
+      setLogs((prev) => prev.filter((l) => l.id !== pickingLogId));
       if (result.element) {
         const el = result.element;
         setPickedElements((prev) => [
@@ -217,8 +233,13 @@ export default function App() {
             id: ++logIdCounter,
             tag: String(el.tag),
             selector: String(el.selector),
-            text: String(el.text || "").slice(0, 40),
+            text: String(el.text || "").slice(0, elementTextLimit),
           },
+        ]);
+      } else if (result.timeout) {
+        setLogs((prev) => [
+          ...prev,
+          { id: ++logIdCounter, type: "error", content: "选择元素超时", timestamp: Date.now() },
         ]);
       }
     } catch (err) {
@@ -229,8 +250,7 @@ export default function App() {
     } finally {
       setPicking(false);
     }
-  }, [picking]);
-
+  }, [picking, elementTextLimit]);
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -407,7 +427,7 @@ export default function App() {
             <Box sx={{ flexGrow: 1 }} />
 
             {/* 右侧操作按钮 */}
-            <Tooltip title={picking ? "正在选择..." : "指定页面元素"}>
+            <Tooltip title={picking ? "正在选择..." : "选择页面元素"}>
               <IconButton
                 size="small"
                 onClick={handlePickElement}

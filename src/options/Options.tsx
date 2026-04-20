@@ -31,6 +31,7 @@ interface Settings {
   baseUrl: string;
   model: string;
   provider: string;
+  elementTextLimit: number;
 }
 
 const defaultSettings: Settings = {
@@ -38,6 +39,7 @@ const defaultSettings: Settings = {
   baseUrl: "https://api.openai.com/v1",
   model: "gpt-4o",
   provider: "openai",
+  elementTextLimit: 128,
 };
 
 const providerPresets: Record<string, { baseUrl: string; models: string[] }> = {
@@ -215,6 +217,26 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
                 设置已保存！
               </Alert>
             )}
+          </Stack>
+        </Paper>
+
+        <Paper sx={{ p: 3 }}>
+          <Stack spacing={2.5}>
+            <Typography variant="subtitle2" color="text.secondary">
+              元素选择器
+            </Typography>
+
+            <TextField
+              label="元素文本截取长度"
+              type="number"
+              value={settings.elementTextLimit}
+              onChange={(e) =>
+                setSettings((prev) => ({ ...prev, elementTextLimit: Math.max(1, parseInt(e.target.value) || 128) }))
+              }
+              fullWidth
+              helperText="选择页面元素时，截取元素文本的最大字符数（默认 128）"
+              slotProps={{ htmlInput: { min: 1, max: 10000 } }}
+            />
           </Stack>
         </Paper>
       </Stack>
