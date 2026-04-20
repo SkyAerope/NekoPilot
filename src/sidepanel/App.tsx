@@ -571,7 +571,7 @@ export default function App() {
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, px: 1.5, pt: 1, pb: 0 }}>
               {picking && (
                 <Chip
-                  label="正在选择元素，按 ESC 取消"
+                  label="正在选择元素..."
                   size="small"
                   color="warning"
                   variant="outlined"
@@ -810,9 +810,12 @@ function TimelineStep({
           flexDirection: "column",
           alignItems: "center",
           flexShrink: 0,
+          position: "relative",
+          minHeight: 28,
         }}
       >
-        <Box sx={{ width: 1.5, height: 8, bgcolor: showTopLine ? "divider" : "transparent", flexShrink: 0 }} />
+        <Box sx={{ width: 1.5, height: "100%", bgcolor: showTopLine ? "divider" : "transparent", position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", bottom: "50%" }} />
+        <Box sx={{ width: 1.5, height: "100%", bgcolor: showBottomLine ? "divider" : "transparent", position: "absolute", top: "50%", left: "50%", transform: "translateX(-50%)" }} />
         <Box
           sx={{
             display: "flex",
@@ -820,16 +823,18 @@ function TimelineStep({
             justifyContent: "center",
             width: 20,
             height: 20,
-            flexShrink: 0,
+            position: "relative",
+            zIndex: 1,
+            bgcolor: "background.default",
+            borderRadius: "50%",
           }}
         >
           {icon}
         </Box>
-        <Box sx={{ width: 1.5, flex: 1, bgcolor: showBottomLine ? "divider" : "transparent" }} />
       </Box>
 
       {/* 内容列 */}
-      <Box sx={{ flex: 1, minWidth: 0, pb: 1, pl: 1 }}>
+      <Box sx={{ flex: 1, minWidth: 0, pb: 1, pl: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
         {entry.type === "tool_call" && (
           <ToolCallStep
             entry={entry}
@@ -886,7 +891,7 @@ function ToolCallStep({
           "&:hover": hasResult && !isScreenshot ? { opacity: 0.8 } : {},
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary" }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px" }}>
           {getToolLabel(entry.toolName)}
         </Typography>
 

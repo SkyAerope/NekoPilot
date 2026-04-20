@@ -76,7 +76,8 @@ export class AgentLoop {
 
       // 如果没有 tool_calls，说明 agent 回复了最终结果
       if (!response.tool_calls || response.tool_calls.length === 0) {
-        const text = response.content ?? "";
+        const rawContent = response.content ?? "";
+        const text = typeof rawContent === "string" ? rawContent : rawContent.filter(p => p.type === "text").map(p => (p as { type: "text"; text: string }).text).join("");
         this.messages.push({ role: "assistant", content: text });
         this.emit({ type: "message", data: text });
         this.emit({ type: "done", data: text });
@@ -177,18 +178,21 @@ export class AgentLoop {
     });
 
     // 将结果加入消息历史
-    let content: string;
     if (name === "screenshot" && result.success) {
-      // 截图返回简短提示，实际图片数据太长
-      content = "[Screenshot captured successfully. Base64 image data available.]";
+      this.messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: [
+          { type: "text", text: "Screenshot captured:" },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${result.data}` } },
+        ],
+      });
     } else {
-      content = JSON.stringify(result.data ?? result.error);
+      this.messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result.data ?? result.error),
+      });
     }
-
-    this.messages.push({
-      role: "tool",
-      tool_call_id: toolCall.id,
-      content,
-    });
   }
 }

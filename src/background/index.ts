@@ -169,22 +169,10 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
             window.__nekopilotPickResult = info;
           });
 
-          // ESC 取消 — 使用 capture 阶段确保拦截
-          function onKeyDown(e) {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              cleanup();
-              window.__nekopilotPickResult = null;
-            }
-          }
-          document.addEventListener('keydown', onKeyDown, true);
-
           function cleanup() {
             overlay.remove();
             highlight.remove();
             window.__nekopilotPicker = false;
-            document.removeEventListener('keydown', onKeyDown, true);
           }
 
           function buildSelector(el) {
