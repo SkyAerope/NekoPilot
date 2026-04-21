@@ -82,15 +82,28 @@ export class AgentLoop {
     // 整个 loop 静默卡死（UI 看起来像"正常结束"但没有下一轮请求）。
     // navigator.locks 持有期间 Chrome 不会终止 SW —— 这是官方推荐的保活 hack。
     if (typeof navigator !== "undefined" && navigator.locks) {
+      // eslint-disable-next-line no-console
+      console.log("[NekoPilot] run() acquiring Web Lock for SW keep-alive");
       // navigator.locks.request 的回调可返回 Promise；TS lib 的 LockGrantedCallback<T>
       // 签名把 T 当作回调同步返回值，与实际运行时行为不符，这里走 any 绕过。
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (navigator.locks.request as any)(
         "nekopilot-agent-run",
         { mode: "exclusive" },
-        async () => this.runInner(history),
+        async () => {
+          // eslint-disable-next-line no-console
+          console.log("[NekoPilot] run() lock acquired, starting inner loop");
+          try {
+            return await this.runInner(history);
+          } finally {
+            // eslint-disable-next-line no-console
+            console.log("[NekoPilot] run() inner loop ended, releasing lock");
+          }
+        },
       );
     }
+    // eslint-disable-next-line no-console
+    console.warn("[NekoPilot] navigator.locks unavailable; SW keep-alive disabled");
     return this.runInner(history);
   }
 
@@ -101,6 +114,8 @@ export class AgentLoop {
     ];
 
     const finishWith = (text: string, eventType: "done" | "error" = "done") => {
+      // eslint-disable-next-line no-console
+      console.log("[NekoPilot] finishWith:", eventType, JSON.stringify(text).slice(0, 120));
       this.finalizePendingToolUses();
       this.emit({ type: eventType, data: text });
       if (eventType === "error") this.emit({ type: "done", data: text });
