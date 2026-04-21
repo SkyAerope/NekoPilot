@@ -135,6 +135,10 @@ export class AgentLoop {
       }
       this.messages.push(...deferredMessages);
 
+      // eslint-disable-next-line no-console
+      console.log("[NekoPilot] tool batch done. messages now:", this.messages.length,
+        "deferred:", deferredMessages.length, "aborted:", this.aborted);
+
       // 工具循环中被 abort：在退出前补齐缺失的 tool_result，然后结束
       if (this.aborted) {
         return finishWith("Agent was stopped.");
@@ -548,6 +552,9 @@ export class AgentLoop {
     const { name, arguments: argsStr } = toolCall.function;
     const needsPermission = this.config.permissionMode === "ask" && !AgentLoop.READONLY_TOOLS.has(name);
 
+    // eslint-disable-next-line no-console
+    console.log("[NekoPilot] tool start:", name, "id:", toolCall.id);
+
     this.emit({
       type: "tool_call",
       data: { name, args: argsStr, id: toolCall.id, needsPermission },
@@ -640,7 +647,12 @@ export class AgentLoop {
       params = {};
     }
 
+    // eslint-disable-next-line no-console
+    console.log("[NekoPilot] tool execute:", name);
     const result = await this.tools.execute(name, params);
+    // eslint-disable-next-line no-console
+    console.log("[NekoPilot] tool done:", name, "success:", result.success,
+      "dataKind:", typeof result.data, Array.isArray(result.data) ? "array" : "");
 
     this.emit({
       type: "tool_result",
