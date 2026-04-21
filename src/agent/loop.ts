@@ -82,28 +82,15 @@ export class AgentLoop {
     // 整个 loop 静默卡死（UI 看起来像"正常结束"但没有下一轮请求）。
     // navigator.locks 持有期间 Chrome 不会终止 SW —— 这是官方推荐的保活 hack。
     if (typeof navigator !== "undefined" && navigator.locks) {
-      // eslint-disable-next-line no-console
-      console.log("[NekoPilot] run() acquiring Web Lock for SW keep-alive");
       // navigator.locks.request 的回调可返回 Promise；TS lib 的 LockGrantedCallback<T>
       // 签名把 T 当作回调同步返回值，与实际运行时行为不符，这里走 any 绕过。
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (navigator.locks.request as any)(
         "nekopilot-agent-run",
         { mode: "exclusive" },
-        async () => {
-          // eslint-disable-next-line no-console
-          console.log("[NekoPilot] run() lock acquired, starting inner loop");
-          try {
-            return await this.runInner(history);
-          } finally {
-            // eslint-disable-next-line no-console
-            console.log("[NekoPilot] run() inner loop ended, releasing lock");
-          }
-        },
+        async () => this.runInner(history),
       );
     }
-    // eslint-disable-next-line no-console
-    console.warn("[NekoPilot] navigator.locks unavailable; SW keep-alive disabled");
     return this.runInner(history);
   }
 
@@ -114,8 +101,6 @@ export class AgentLoop {
     ];
 
     const finishWith = (text: string, eventType: "done" | "error" = "done") => {
-      // eslint-disable-next-line no-console
-      console.log("[NekoPilot] finishWith:", eventType, JSON.stringify(text).slice(0, 120));
       this.finalizePendingToolUses();
       this.emit({ type: eventType, data: text });
       if (eventType === "error") this.emit({ type: "done", data: text });
@@ -131,8 +116,6 @@ export class AgentLoop {
       try {
         response = await this.callLlm();
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[NekoPilot] callLlm threw:", err);
         // 用户主动 abort：不要把 AbortError 当 LLM 错误透传
         if (this.aborted) {
           return finishWith("Agent was stopped.");
@@ -169,10 +152,6 @@ export class AgentLoop {
         }
       }
       this.messages.push(...deferredMessages);
-
-      // eslint-disable-next-line no-console
-      console.log("[NekoPilot] tool batch done. messages now:", this.messages.length,
-        "deferred:", deferredMessages.length, "aborted:", this.aborted);
 
       // 工具循环中被 abort：在退出前补齐缺失的 tool_result，然后结束
       if (this.aborted) {
@@ -237,12 +216,10 @@ export class AgentLoop {
       messages: this.messages,
       tools: functions,
       stream: true,
+      // 要求每轮 SSE 最后一条 chunk 带 usage（prompt/completion/total tokens）。
+      // 绝大多数 OpenAI 兼容端点都支持；不支持的会忽略该字段。
+      stream_options: { include_usage: true },
     };
-
-    // eslint-disable-next-line no-console
-    console.log("[NekoPilot] LLM request — messages:", this.messages.length,
-      "last:", this.messages[this.messages.length - 1]?.role,
-      "tools:", functions.length);
 
     const resp = await fetch(`${this.config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -292,6 +269,18 @@ export class AgentLoop {
           chunk = JSON.parse(data);
         } catch {
           continue;
+        }
+
+        // OpenAI 兼容流：usage 出现在最后一条 chunk 的顶层（与 choices 平级）
+        if (chunk.usage && typeof chunk.usage.total_tokens === "number") {
+          this.emit({
+            type: "usage",
+            data: {
+              promptTokens: chunk.usage.prompt_tokens ?? 0,
+              completionTokens: chunk.usage.completion_tokens ?? 0,
+              totalTokens: chunk.usage.total_tokens,
+            },
+          });
         }
 
         const delta = chunk.choices?.[0]?.delta;
@@ -345,10 +334,6 @@ export class AgentLoop {
     }
 
     const toolCalls = Array.from(toolCallsMap.values()) as ToolCall[];
-
-    // eslint-disable-next-line no-console
-    console.log("[NekoPilot] LLM response \u2014 contentLen:", content.length,
-      "toolCalls:", toolCalls.map(t => t.function.name));
 
     this.emit({ type: "assistant_turn_done", data: "" });
 
@@ -503,6 +488,9 @@ export class AgentLoop {
     let currentToolId = "";
     let currentToolName = "";
     let currentToolArgs = "";
+    // Anthropic usage：message_start 给 input_tokens，message_delta 累计 output_tokens
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
@@ -524,6 +512,23 @@ export class AgentLoop {
 
         let event;
         try { event = JSON.parse(data); } catch { continue; }
+
+        if (event.type === "message_start") {
+          const u = event.message?.usage;
+          if (u) {
+            inputTokens = u.input_tokens ?? 0;
+            outputTokens = u.output_tokens ?? 0;
+          }
+          continue;
+        }
+
+        if (event.type === "message_delta") {
+          const u = event.usage;
+          if (u && typeof u.output_tokens === "number") {
+            outputTokens = u.output_tokens;
+          }
+          continue;
+        }
 
         if (event.type === "content_block_start") {
           const block = event.content_block;
@@ -569,6 +574,17 @@ export class AgentLoop {
 
     this.emit({ type: "assistant_turn_done", data: "" });
 
+    if (inputTokens || outputTokens) {
+      this.emit({
+        type: "usage",
+        data: {
+          promptTokens: inputTokens,
+          completionTokens: outputTokens,
+          totalTokens: inputTokens + outputTokens,
+        },
+      });
+    }
+
     return {
       role: "assistant",
       content: hasContent ? content : null,
@@ -584,9 +600,6 @@ export class AgentLoop {
   private async executeToolCall(toolCall: ToolCall, deferredMessages: ChatMessage[]): Promise<void> {
     const { name, arguments: argsStr } = toolCall.function;
     const needsPermission = this.config.permissionMode === "ask" && !AgentLoop.READONLY_TOOLS.has(name);
-
-    // eslint-disable-next-line no-console
-    console.log("[NekoPilot] tool start:", name, "id:", toolCall.id);
 
     this.emit({
       type: "tool_call",
@@ -680,12 +693,7 @@ export class AgentLoop {
       params = {};
     }
 
-    // eslint-disable-next-line no-console
-    console.log("[NekoPilot] tool execute:", name);
     const result = await this.tools.execute(name, params);
-    // eslint-disable-next-line no-console
-    console.log("[NekoPilot] tool done:", name, "success:", result.success,
-      "dataKind:", typeof result.data, Array.isArray(result.data) ? "array" : "");
 
     this.emit({
       type: "tool_result",

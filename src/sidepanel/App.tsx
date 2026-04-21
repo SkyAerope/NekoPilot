@@ -260,6 +260,13 @@ const markdownSx = {
 
 // ── 主组件 ──
 
+/** 紧凑格式化 token 数：1234 → "1.2k"，1234567 → "1.2M"。 */
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, "") + "k";
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+}
+
 export default function App() {
   const [input, setInput] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -272,6 +279,9 @@ export default function App() {
   const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [elementTextLimit, setElementTextLimit] = useState(128);
+  /** 最近一次 LLM 响应的 prompt token 数——代表"当前上下文占用"。
+   *  每轮请求都会刷新，UI 把它显示在工具栏让用户知道还剩多少预算。 */
+  const [promptTokens, setPromptTokens] = useState<number | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -527,6 +537,17 @@ export default function App() {
         return;
       }
 
+      if (event.type === "usage") {
+        const u = event.data as { promptTokens?: number; totalTokens?: number } | undefined;
+        // prompt_tokens 反映上一轮请求的上下文大小，最能代表"当前占了多少上下文"。
+        // 没有时兜底用 totalTokens。
+        const n = typeof u?.promptTokens === "number" && u.promptTokens > 0
+          ? u.promptTokens
+          : typeof u?.totalTokens === "number" ? u.totalTokens : null;
+        if (n !== null) setPromptTokens(n);
+        return;
+      }
+
       if (event.type === "error") {
         setLogs((prev) => [...prev, {
           id: ++logIdCounter,
@@ -650,6 +671,7 @@ export default function App() {
 
   const handleClearChat = useCallback(() => {
     setLogs([]);
+    setPromptTokens(null);
     sendMessage("agent:reset").catch(() => {});
   }, []);
 
@@ -1094,6 +1116,23 @@ export default function App() {
             </Menu>
 
             <Box sx={{ flexGrow: 1 }} />
+
+            {promptTokens !== null && (
+              <Tooltip title={`上下文 ${promptTokens.toLocaleString()} tokens（上一轮请求）`}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    opacity: 0.7,
+                    fontFamily: "monospace",
+                    px: 0.75,
+                    userSelect: "none",
+                  }}
+                >
+                  {formatTokens(promptTokens)}
+                </Typography>
+              </Tooltip>
+            )}
 
             <Tooltip title={picking ? "正在选择..." : "选择页面元素"}>
               <IconButton size="small" onClick={handlePickElement} disabled={picking} color={picking ? "primary" : "default"}>
