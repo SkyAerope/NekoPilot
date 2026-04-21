@@ -65,6 +65,8 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       await cdp.attach(tab.id!);
       userTurnIndices.push(conversationHistory.length);
       conversationHistory.push({ role: "user", content: userMessage });
+      tools.configureShortRefs(config.enableShortRefs !== false);
+      tools.configureScreenshotQuality(typeof config.screenshotQuality === "number" ? config.screenshotQuality : 80);
       agentLoop = new AgentLoop(tools, config, (event) => {
         chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
       });
@@ -90,6 +92,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         agentLoop = null;
       }
       tools.removeClickMarker().catch(() => {});
+      tools.resetShortRefs();
       return { ok: true };
     }
     case "agent:truncateBeforeUserTurn": {

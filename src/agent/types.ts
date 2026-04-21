@@ -8,6 +8,8 @@ export interface AgentConfig {
   permissionMode: "ask" | "auto";
   showClickMarker: boolean;
   provider: "openai" | "anthropic";
+  enableShortRefs: boolean;
+  screenshotQuality: number;
 }
 
 export type AgentEventType =

@@ -6,6 +6,75 @@ import type { ToolResult } from "./types";
 export class ToolExecutor {
   constructor(private cdp: CdpManager) {}
 
+  // ── 短引用（#n）支持 ──
+  // 在一次对话中，read_page_interactive / find_element 返回的元素会附带 ref: "#n"；
+  // 模型后续可以把 #n 用作 selector，executor 会把它还原为真实 CSS 选择器。
+  private shortRefMap = new Map<string, string>();
+  private shortRefCounter = 0;
+  private shortRefsEnabled = false;
+  private screenshotQuality = 80;
+
+  configureShortRefs(enabled: boolean): void {
+    this.shortRefsEnabled = enabled;
+  }
+  configureScreenshotQuality(quality: number): void {
+    this.screenshotQuality = Math.max(10, Math.min(100, Math.round(quality)));
+  }
+  resetShortRefs(): void {
+    this.shortRefMap.clear();
+    this.shortRefCounter = 0;
+  }
+  private allocShortRef(selector: string): string {
+    const id = `#${++this.shortRefCounter}`;
+    this.shortRefMap.set(id, selector);
+    return id;
+  }
+  /** 若 input 是对话内分配过的 #n 短引用，则还原为真实选择器；否则原样返回 */
+  private resolveShortRef(selector: string): string {
+    if (!this.shortRefsEnabled) return selector;
+    if (/^#\d+$/.test(selector) && this.shortRefMap.has(selector)) {
+      return this.shortRefMap.get(selector)!;
+    }
+    return selector;
+  }
+
+  /**
+   * 对 readPageInteractive / findElement 返回的 YAML 文本做后处理：
+   * 为每条列表项的 selector 行分配一个 #n 短引用，并在同缩进层插入 ref: "#n"。
+   * 禁用短引用时直接返回原文。
+   */
+  private annotateShortRefs(text: string): string {
+    if (!this.shortRefsEnabled) return text;
+    const lines = text.split("\n");
+    const out: string[] = [];
+    // 匹配形如 `  selector: "xxx"` 或 `- selector: "xxx"`（可能前导 `- ` 或空格）
+    const re = /^(\s*-?\s*)selector:\s*(".*"|'.*'|[^\s].*)$/;
+    for (const line of lines) {
+      out.push(line);
+      const m = line.match(re);
+      if (!m) continue;
+      const indentPart = m[1];
+      // 解析 selector 值（优先 JSON.parse，失败则保留原串去引号）
+      let rawVal = m[2].trim();
+      let selector: string;
+      try {
+        selector = JSON.parse(rawVal);
+      } catch {
+        if ((rawVal.startsWith('"') && rawVal.endsWith('"')) || (rawVal.startsWith("'") && rawVal.endsWith("'"))) {
+          selector = rawVal.slice(1, -1);
+        } else {
+          selector = rawVal;
+        }
+      }
+      if (!selector) continue;
+      const ref = this.allocShortRef(selector);
+      // 保持同层缩进：若 indentPart 含 `- `，后续字段应用等长空白
+      const sameIndent = indentPart.replace(/-\s/g, "  ");
+      out.push(`${sameIndent}ref: ${JSON.stringify(ref)}`);
+    }
+    return out.join("\n");
+  }
+
   /** 安全执行 JS 表达式，检查 CDP exceptionDetails */
   private async evaluate<T = string>(expression: string): Promise<T> {
     const result = await this.cdp.send<{
@@ -100,6 +169,7 @@ export class ToolExecutor {
 
   /** 检查 CSS 选择器是否能匹配到可见元素，返回 true/false */
   async checkElement(selector: string): Promise<boolean> {
+    selector = this.resolveShortRef(selector);
     const expr = `(function() {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return false;
@@ -111,6 +181,7 @@ export class ToolExecutor {
 
   /** 解析 CSS 选择器为元素中心点坐标，元素不存在返回 null */
   async resolveSelectorCenter(selector: string): Promise<{ x: number; y: number } | null> {
+    selector = this.resolveShortRef(selector);
     const expr = `(function() {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return null;
@@ -150,8 +221,44 @@ export class ToolExecutor {
 
   async removeClickMarker(): Promise<void> {
     await this.cdp.send("Runtime.evaluate", {
-      expression: "document.getElementById('__nekopilot-click-marker')?.remove();document.getElementById('__nekopilot-click-marker-style')?.remove();",
+      expression: "document.getElementById('__nekopilot-click-marker')?.remove();document.getElementById('__nekopilot-click-marker-style')?.remove();document.getElementById('__nekopilot-input-marker')?.remove();",
     });
+  }
+
+  /** 在目标输入框周围显示脉动高亮框 */
+  async showInputMarker(selector: string): Promise<void> {
+    selector = this.resolveShortRef(selector);
+    const selJson = JSON.stringify(selector);
+    const expression = `
+      (function() {
+        const old = document.getElementById('__nekopilot-input-marker');
+        if (old) old.remove();
+        const el = document.querySelector(${selJson});
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const m = document.createElement('div');
+        m.id = '__nekopilot-input-marker';
+        m.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+          + 'left:' + (r.left - 4) + 'px;top:' + (r.top - 4) + 'px;'
+          + 'width:' + (r.width + 8) + 'px;height:' + (r.height + 8) + 'px;'
+          + 'border:2px solid #a78bfa;border-radius:6px;'
+          + 'background:rgba(167,139,250,0.12);'
+          + 'box-shadow:0 0 0 4px rgba(167,139,250,0.15);'
+          + 'animation:__neko-input-pulse 1.2s ease-in-out infinite;';
+        let style = document.getElementById('__nekopilot-click-marker-style');
+        if (!style) {
+          style = document.createElement('style');
+          style.id = '__nekopilot-click-marker-style';
+          document.head.appendChild(style);
+        }
+        const rule = '@keyframes __neko-input-pulse{0%,100%{opacity:1}50%{opacity:0.5}}';
+        if (!style.textContent?.includes('__neko-input-pulse')) {
+          style.textContent = (style.textContent || '') + rule;
+        }
+        document.body.appendChild(m);
+      })()
+    `;
+    await this.cdp.send("Runtime.evaluate", { expression });
   }
 
   /** 显示 scroll 位置标记（带方向箭头） */
@@ -189,12 +296,16 @@ export class ToolExecutor {
 
   // ── 具体 Tool 实现 ──
 
-  private async screenshot(): Promise<string> {
+  private async screenshot(): Promise<{ data: string; mime: string }> {
+    const useJpeg = this.screenshotQuality < 100;
+    const params: Record<string, unknown> = useJpeg
+      ? { format: "jpeg", quality: this.screenshotQuality }
+      : { format: "png" };
     const result = await this.cdp.send<{ data: string }>(
       "Page.captureScreenshot",
-      { format: "png" }
+      params
     );
-    return result.data; // base64
+    return { data: result.data, mime: useJpeg ? "image/jpeg" : "image/png" };
   }
 
   private async readPageText(limit: number, offset: number): Promise<string> {
@@ -303,12 +414,14 @@ export class ToolExecutor {
         return lines.join('\\n');
       })()
     `;
-    return this.evaluate(expression);
+    const raw = await this.evaluate<string>(expression);
+    return this.annotateShortRefs(raw);
   }
 
   private async click(x?: number, y?: number, selector?: string, jsClick = false): Promise<void> {
     // 场景 1: 使用 selector —— 先 scrollIntoViewIfNeeded，再按 jsClick 分派
     if (selector) {
+      selector = this.resolveShortRef(selector);
       const selJson = JSON.stringify(selector);
       const prepExpr = `(function() {
         const el = document.querySelector(${selJson});
@@ -375,6 +488,7 @@ export class ToolExecutor {
   }
 
   private async setInput(selector: string, value: string, jsSet = false): Promise<void> {
+    selector = this.resolveShortRef(selector);
     const selJson = JSON.stringify(selector);
     // 先 scrollIntoViewIfNeeded + focus
     const prepExpr = `(function() {
@@ -542,7 +656,8 @@ export class ToolExecutor {
         }).join('\\n');
       })()
     `;
-    return this.evaluate(expression);
+    const raw = await this.evaluate<string>(expression);
+    return this.annotateShortRefs(raw);
   }
 
   private async getElementText(
@@ -550,6 +665,7 @@ export class ToolExecutor {
     limit: number,
     offset: number
   ): Promise<string> {
+    selector = this.resolveShortRef(selector);
     const expression = `
       (function() {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -566,6 +682,7 @@ export class ToolExecutor {
   }
 
   private async getElementRect(selector: string): Promise<string> {
+    selector = this.resolveShortRef(selector);
     const expression = `
       (function() {
         const el = document.querySelector(${JSON.stringify(selector)});

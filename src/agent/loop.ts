@@ -23,10 +23,15 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 注意：
 - 坐标基于页面视口左上角
 - 使用 read_page_interactive 获取可交互元素列表更高效
-- 使用 jsClick 或 jsSet 时无需将元素滚动至视口内。处理视口较小，但需要操作大量元素的页面更高效
+- 如果CDP使用失败，尝试使用 jsClick 或 jsSet 。
 - 每次操作后用 screenshot 确认结果
 - 如果操作失败，尝试其他方法`;
+const SHORT_REFS_HINT = `
 
+元素短引用（#n）：
+- read_page_interactive / find_element 返回的每个元素都附带 ref 字段，形如 "#1"、"#2"。
+- 在后续 click / set_input / get_element_text / get_element_rect 等工具的 selector 参数中，你可以直接填写这些 #n 值，扩展会自动还原成真实 CSS 选择器。
+- 这样可以显著节省 token，也更不易因长选择器转义出错。优先使用 #n 而非完整选择器。`;
 export class AgentLoop {
   private messages: ChatMessage[] = [];
   private aborted = false;
@@ -70,7 +75,7 @@ export class AgentLoop {
 
   async run(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
     this.messages = [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: SYSTEM_PROMPT + (this.config.enableShortRefs ? SHORT_REFS_HINT : "") },
       ...history,
     ];
 
@@ -560,6 +565,12 @@ export class AgentLoop {
               await this.tools.showScrollMarker(x, y, dx, dy);
               showedMarker = true;
             }
+          } else if (name === "set_input") {
+            const sel = args.selector as string | undefined;
+            if (sel) {
+              await this.tools.showInputMarker(sel).catch(() => {});
+              showedMarker = true;
+            }
           }
         } catch { /* 解析失败忽略 */ }
       }
@@ -596,6 +607,9 @@ export class AgentLoop {
 
     // 将结果加入消息历史
     if (name === "screenshot" && result.success) {
+      const shot = result.data as { data: string; mime: string } | string;
+      const dataB64 = typeof shot === "string" ? shot : shot.data;
+      const mime = typeof shot === "string" ? "image/png" : shot.mime;
       // tool 消息只能是字符串，图片需通过 user 消息传入
       this.messages.push({
         role: "tool",
@@ -607,7 +621,7 @@ export class AgentLoop {
         role: "user",
         content: [
           { type: "text", text: "[screenshot result]" },
-          { type: "image_url", image_url: { url: `data:image/png;base64,${result.data}` } },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${dataB64}` } },
         ],
       });
     } else {

@@ -19,6 +19,7 @@ import {
   CircularProgress,
   FormControlLabel,
   Switch,
+  Slider,
 } from "@mui/material";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import LightModeIcon from "@mui/icons-material/LightMode";
@@ -35,6 +36,8 @@ interface Settings {
   provider: string;
   elementTextLimit: number;
   showClickMarker: boolean;
+  enableShortRefs: boolean;
+  screenshotQuality: number;
 }
 
 const defaultSettings: Settings = {
@@ -44,6 +47,8 @@ const defaultSettings: Settings = {
   provider: "openai",
   elementTextLimit: 128,
   showClickMarker: true,
+  enableShortRefs: true,
+  screenshotQuality: 80,
 };
 
 const providerPresets: Record<string, { baseUrl: string }> = {
@@ -257,6 +262,50 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
             />
             <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
               在 Ask 模式下，Click 等待审批时在页面上显示点击位置标记
+            </Typography>
+          </Stack>
+        </Paper>
+
+        <Paper sx={{ p: 3 }}>
+          <Stack spacing={2.5}>
+            <Typography variant="subtitle2" color="text.secondary">
+              工具行为
+            </Typography>
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.enableShortRefs}
+                  onChange={(e) => updateSettings({ enableShortRefs: e.target.checked })}
+                />
+              }
+              label="启用 #n 简短元素引用"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+              read_page_interactive / find_element 返回的元素会附带 <code>ref: "#1"</code> 形式的短引用，模型可以直接用 <code>#1</code> 替代复杂 CSS 选择器；执行时由扩展自动还原。该编号在一次对话内自增。
+            </Typography>
+
+            <Divider />
+
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              截图压缩质量：{settings.screenshotQuality}%
+            </Typography>
+            <Slider
+              value={settings.screenshotQuality}
+              onChange={(_e, v) => updateSettings({ screenshotQuality: v as number })}
+              min={10}
+              max={100}
+              step={5}
+              marks={[
+                { value: 10, label: "10%" },
+                { value: 50, label: "50%" },
+                { value: 100, label: "100%" },
+              ]}
+              valueLabelDisplay="auto"
+              sx={{ mt: -0.5 }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+              较低的质量可显著减少 token 消耗。100% 时使用无损 PNG，否则使用 JPEG 压缩。
             </Typography>
           </Stack>
         </Paper>

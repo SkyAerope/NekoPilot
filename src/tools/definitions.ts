@@ -38,7 +38,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "click",
-    description: "在指定坐标或选择器指定的元素上执行点击。传入 selector 时点击该元素中央，此时 x/y 可省略。点击前会自动 scrollIntoViewIfNeeded 确保元素可见。",
+    description: "在指定坐标或选择器指定的元素上执行点击。传入 selector 时点击该元素中央，此时 x/y 可省略。点击前会自动滚动页面至元素可见的位置。",
     parameters: {
       x: { type: "number", description: "点击位置的 X 坐标（与 selector 二选一）" },
       y: { type: "number", description: "点击位置的 Y 坐标（与 selector 二选一）" },
@@ -51,7 +51,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "set_input",
-    description: "聚焦指定元素并输入文本。输入前会自动 scrollIntoViewIfNeeded 并 focus。",
+    description: "聚焦指定元素并输入文本。输入前会自动滚动页面至元素可见的位置并 focus。",
     parameters: {
       selector: {
         type: "string",

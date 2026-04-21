@@ -77,6 +77,7 @@ interface LogEntry {
   needsPermission?: boolean;
   permissionResolved?: boolean;
   screenshotData?: string;
+  screenshotMime?: string;
   pickedElements?: PickedElement[];
   // thinking 相关
   thinkingDone?: boolean;
@@ -142,6 +143,34 @@ function getToolLabel(name?: string): string {
     drag: "Drag",
   };
   return labels[name ?? ""] ?? name ?? "Tool";
+}
+
+/** 从工具的原始 args (JSON 字符串) 中提取一段简短的副标题，用于在审批时让用户看到关键参数 */
+function getToolSubtitle(name?: string, argsStr?: string): string {
+  if (!name || !argsStr) return "";
+  let args: Record<string, unknown> = {};
+  try { args = JSON.parse(argsStr); } catch { return ""; }
+  const trim = (s: string, n = 60) => (s.length > n ? s.slice(0, n) + "…" : s);
+  switch (name) {
+    case "navigate":
+      return typeof args.url === "string" ? args.url : "";
+    case "set_input": {
+      const v = typeof args.value === "string" ? args.value : "";
+      return v ? `"${trim(v, 40)}"` : "";
+    }
+    case "click":
+      if (typeof args.selector === "string") return trim(args.selector, 50);
+      if (typeof args.x === "number" && typeof args.y === "number") return `(${args.x}, ${args.y})`;
+      return "";
+    case "find_element":
+      return typeof args.text === "string" ? `"${trim(args.text, 40)}"` : "";
+    case "wait":
+      return typeof args.ms === "number" ? `${args.ms}ms` : "";
+    case "scroll":
+      return typeof args.deltaY === "number" ? `Δy=${args.deltaY}` : "";
+    default:
+      return "";
+  }
 }
 
 // ── 日志分段 ──
@@ -413,11 +442,17 @@ export default function App() {
               : typeof resultData === "string"
                 ? resultData
                 : JSON.stringify(resultData, null, 2);
+            const shotInfo = (data.name === "screenshot" && data.result.success)
+              ? (typeof data.result.data === "string"
+                  ? { data: data.result.data as string, mime: "image/png" }
+                  : (data.result.data as { data: string; mime: string }))
+              : null;
             return {
               ...log,
               toolResult: formatted,
               toolSuccess: data.result.success,
-              screenshotData: data.name === "screenshot" && data.result.success ? String(data.result.data) : undefined,
+              screenshotData: shotInfo?.data,
+              screenshotMime: shotInfo?.mime,
             };
           }
           return log;
@@ -530,6 +565,8 @@ export default function App() {
       model?: string;
       showClickMarker?: boolean;
       provider?: string;
+      enableShortRefs?: boolean;
+      screenshotQuality?: number;
     }>("settings:get");
 
     if (!settings?.apiKey) {
@@ -687,7 +724,7 @@ export default function App() {
       ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
       .join("\n") ?? "";
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string }>("settings:get");
+    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotQuality?: number }>("settings:get");
     if (!settings?.apiKey) {
       setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
       return;
@@ -707,6 +744,8 @@ export default function App() {
           permissionMode: autoMode ? "auto" : "ask",
           showClickMarker: settings.showClickMarker !== false,
           provider: settings.provider === "anthropic" ? "anthropic" : "openai",
+          enableShortRefs: settings.enableShortRefs !== false,
+          screenshotQuality: typeof settings.screenshotQuality === "number" ? settings.screenshotQuality : 80,
         },
       });
     } catch (err) {
@@ -732,8 +771,10 @@ export default function App() {
   const segments = useMemo(() => groupLogs(logs), [logs]);
   const turns = useMemo(() => groupIntoTurns(segments), [segments]);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(new Set());
+  // 用户手动操作过（展开或折叠）的 key — 自动展开/折叠逻辑对这些 key 不再生效
+  const [interactedKeys, setInteractedKeys] = useState<Set<number>>(new Set());
 
-  // 自动展开/折叠 steps 分组
+  // 自动展开/折叠 steps 分组（仅对用户未碰过的 key 生效）
   useEffect(() => {
     if (logs.length === 0) return;
     const last = logs[logs.length - 1];
@@ -747,14 +788,24 @@ export default function App() {
       ) {
         groupStart--;
       }
-      setExpandedGroupKeys((prev) => new Set([...prev, logs[groupStart].id]));
+      const groupKey = logs[groupStart].id;
+      if (!interactedKeys.has(groupKey)) {
+        setExpandedGroupKeys((prev) => (prev.has(groupKey) ? prev : new Set([...prev, groupKey])));
+      }
     } else if (last.type === "assistant") {
-      // 助手开始正式回复：折叠所有 steps
-      setExpandedGroupKeys(new Set());
+      // 助手开始正式回复：折叠所有未被用户碰过的 steps
+      setExpandedGroupKeys((prev) => {
+        const next = new Set<number>();
+        for (const k of prev) {
+          if (interactedKeys.has(k)) next.add(k);
+        }
+        return next;
+      });
     }
-  }, [logs]);
+  }, [logs, interactedKeys]);
 
   const toggleGroup = useCallback((key: number) => {
+    setInteractedKeys((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
     setExpandedGroupKeys((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -1138,6 +1189,11 @@ function TimelineStep({
   onDismiss: (id: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [userTouched, setUserTouched] = useState(false);
+  const handleToggle = useCallback(() => {
+    setUserTouched(true);
+    setExpanded((e) => !e);
+  }, []);
 
   const icon =
     entry.type === "error" ? (
@@ -1209,7 +1265,7 @@ function TimelineStep({
           <ToolCallStep
             entry={entry}
             expanded={expanded}
-            onToggle={() => setExpanded(!expanded)}
+            onToggle={handleToggle}
             onApprove={onApprove}
             onReject={onReject}
           />
@@ -1218,8 +1274,8 @@ function TimelineStep({
         {entry.type === "thinking" && (
           <ThinkingStep
             entry={entry}
-            expanded={entry.thinkingDone ? expanded : true}
-            onToggle={() => setExpanded(!expanded)}
+            expanded={entry.thinkingDone || userTouched ? expanded : true}
+            onToggle={handleToggle}
           />
         )}
 
@@ -1364,6 +1420,17 @@ function ToolCallStep({
         <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px" }}>
           {getToolLabel(entry.toolName)}
         </Typography>
+        {(() => {
+          const subtitle = getToolSubtitle(entry.toolName, entry.content);
+          return subtitle ? (
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", opacity: 0.7, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, maxWidth: 300 }}
+            >
+              {subtitle}
+            </Typography>
+          ) : null;
+        })()}
 
         {isExecuting && <CircularProgress size={12} />}
 
@@ -1391,7 +1458,7 @@ function ToolCallStep({
         <Collapse in={expanded}>
           <Box
             component="img"
-            src={`data:image/png;base64,${entry.screenshotData}`}
+            src={`data:${entry.screenshotMime || "image/png"};base64,${entry.screenshotData}`}
             sx={{
               width: 80, height: 50, objectFit: "cover",
               borderRadius: 1, mt: 0.5, border: 1, borderColor: "divider", display: "block",
