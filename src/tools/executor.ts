@@ -114,37 +114,43 @@ export class ToolExecutor {
       case "read_page_interactive":
         return this.readPageInteractive();
       case "click":
-        return this.click(
+        await this.click(
           params.x as number | undefined,
           params.y as number | undefined,
           params.selector as string | undefined,
           (params.jsClick as boolean | undefined) ?? false,
         );
+        return "done";
       case "set_input":
-        return this.setInput(
+        await this.setInput(
           params.selector as string,
           params.value as string,
           (params.jsSet as boolean | undefined) ?? false,
         );
+        return "done";
       case "scroll":
-        return this.scroll(
+        await this.scroll(
           params.x as number,
           params.y as number,
           (params.deltaX as number) ?? 0,
           params.deltaY as number
         );
+        return "done";
       case "drag":
-        return this.drag(
+        await this.drag(
           params.startX as number,
           params.startY as number,
           params.endX as number,
           params.endY as number,
           (params.steps as number) ?? 10
         );
+        return "done";
       case "navigate":
-        return this.navigate(params.url as string);
+        await this.navigate(params.url as string);
+        return "done";
       case "wait":
-        return this.wait(params.ms as number);
+        await this.wait(params.ms as number);
+        return "done";
       case "find_element":
         return this.findElement(
           params.text as string,
