@@ -1135,7 +1135,8 @@ function StepsGroup({
   /** 模型正在生成下一轮回复时显示一个 spinner 占位 step */
   pending?: boolean;
 }) {
-  const stepCount = entries.filter((e) => e.type === "tool_call" || e.type === "thinking").length + (pending ? 1 : 0);
+  // pending 是占位，不算真实 step，否则一个工具 + pending 会被错误地显示成 "2 steps" 折叠头。
+  const stepCount = entries.filter((e) => e.type === "tool_call" || e.type === "thinking").length;
 
   // 只有 1 步时直接显示，不包裹
   if (stepCount <= 1) {
