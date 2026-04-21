@@ -6,7 +6,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "screenshot",
     description:
-      "截取当前页面的屏幕截图，返回 base64 编码的图片（默认 JPEG，质量由用户在设置中配置；100% 质量时为 PNG 无损）。",
+      "截取当前页面的屏幕截图，返回 base64 编码的 PNG 图片。",
     parameters: {},
   },
   {

@@ -193,6 +193,8 @@ export class ToolExecutor {
   async showClickMarker(x: number, y: number): Promise<void> {
     const expression = `
       (function() {
+        // 递增 token 让任何残留的 anchored marker rAF 循环停止
+        window.__nekopilotMarkerToken = (window.__nekopilotMarkerToken || 0) + 1;
         let m = document.getElementById('__nekopilot-click-marker');
         if (m) m.remove();
         m = document.createElement('div');
@@ -218,44 +220,100 @@ export class ToolExecutor {
 
   async removeClickMarker(): Promise<void> {
     await this.cdp.send("Runtime.evaluate", {
-      expression: "document.getElementById('__nekopilot-click-marker')?.remove();document.getElementById('__nekopilot-click-marker-style')?.remove();document.getElementById('__nekopilot-input-marker')?.remove();",
+      expression: "(function(){window.__nekopilotMarkerToken=(window.__nekopilotMarkerToken||0)+1;document.getElementById('__nekopilot-click-marker')?.remove();document.getElementById('__nekopilot-click-marker-style')?.remove();document.getElementById('__nekopilot-input-marker')?.remove();})()",
     });
   }
 
-  /** 在目标输入框周围显示脉动高亮框 */
-  async showInputMarker(selector: string): Promise<void> {
+  /** 给 selector 指向的元素绑定一个跟随位置的高亮 marker。variant 控制外观。 */
+  private async showAnchoredMarker(selector: string, variant: "click" | "input"): Promise<void> {
     selector = this.resolveShortRef(selector);
     const selJson = JSON.stringify(selector);
+    const isClick = variant === "click";
     const expression = `
       (function() {
-        const old = document.getElementById('__nekopilot-input-marker');
+        // 每次调用都递增 token，旧的 rAF 循环检测到不等就自动停。
+        const token = ((window.__nekopilotMarkerToken || 0) + 1);
+        window.__nekopilotMarkerToken = token;
+
+        const markerId = ${isClick ? "'__nekopilot-click-marker'" : "'__nekopilot-input-marker'"};
+        const old = document.getElementById(markerId);
         if (old) old.remove();
-        const el = document.querySelector(${selJson});
-        if (!el) return;
-        const r = el.getBoundingClientRect();
-        const m = document.createElement('div');
-        m.id = '__nekopilot-input-marker';
-        m.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
-          + 'left:' + (r.left - 4) + 'px;top:' + (r.top - 4) + 'px;'
-          + 'width:' + (r.width + 8) + 'px;height:' + (r.height + 8) + 'px;'
-          + 'border:2px solid #a78bfa;border-radius:6px;'
-          + 'background:rgba(167,139,250,0.12);'
-          + 'box-shadow:0 0 0 4px rgba(167,139,250,0.15);'
-          + 'animation:__neko-input-pulse 1.2s ease-in-out infinite;';
+
+        // 公用 keyframes 样式容器
         let style = document.getElementById('__nekopilot-click-marker-style');
         if (!style) {
           style = document.createElement('style');
           style.id = '__nekopilot-click-marker-style';
           document.head.appendChild(style);
         }
-        const rule = '@keyframes __neko-input-pulse{0%,100%{opacity:1}50%{opacity:0.5}}';
-        if (!style.textContent?.includes('__neko-input-pulse')) {
-          style.textContent = (style.textContent || '') + rule;
+        const keyframes = [
+          '@keyframes __neko-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:0.6}}',
+          '@keyframes __neko-input-pulse{0%,100%{opacity:1}50%{opacity:0.5}}',
+        ].filter(k => !(style.textContent || '').includes(k.split('{')[0]));
+        if (keyframes.length) style.textContent = (style.textContent || '') + keyframes.join('');
+
+        const m = document.createElement('div');
+        m.id = markerId;
+        if (${isClick}) {
+          m.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+            + 'width:24px;height:24px;border-radius:50%;'
+            + 'border:2px solid #ef4444;background:rgba(239,68,68,0.2);'
+            + 'box-shadow:0 0 0 4px rgba(239,68,68,0.1);'
+            + 'animation:__neko-pulse 1s ease-in-out infinite;'
+            + 'left:-9999px;top:-9999px;';
+          const dot = document.createElement('div');
+          dot.style.cssText = 'position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;background:#ef4444;transform:translate(-50%,-50%);';
+          m.appendChild(dot);
+        } else {
+          m.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+            + 'border:2px solid #a78bfa;border-radius:6px;'
+            + 'background:rgba(167,139,250,0.12);'
+            + 'box-shadow:0 0 0 4px rgba(167,139,250,0.15);'
+            + 'animation:__neko-input-pulse 1.2s ease-in-out infinite;'
+            + 'left:-9999px;top:-9999px;width:0;height:0;';
         }
         document.body.appendChild(m);
+
+        function update() {
+          // token 变化说明有新 marker 或被主动 remove，旧循环停止
+          if (window.__nekopilotMarkerToken !== token) return;
+          const el = document.querySelector(${selJson});
+          if (!el || !document.contains(m)) {
+            m.remove();
+            return;
+          }
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) {
+            // 元素暂时不可见，先藏起来但保留循环
+            m.style.left = '-9999px';
+            m.style.top = '-9999px';
+          } else if (${isClick}) {
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            m.style.left = (cx - 12) + 'px';
+            m.style.top = (cy - 12) + 'px';
+          } else {
+            m.style.left = (r.left - 4) + 'px';
+            m.style.top = (r.top - 4) + 'px';
+            m.style.width = (r.width + 8) + 'px';
+            m.style.height = (r.height + 8) + 'px';
+          }
+          requestAnimationFrame(update);
+        }
+        requestAnimationFrame(update);
       })()
     `;
     await this.cdp.send("Runtime.evaluate", { expression });
+  }
+
+  /** 在目标输入框周围显示跟随元素位置的脉动高亮框 */
+  async showInputMarker(selector: string): Promise<void> {
+    return this.showAnchoredMarker(selector, "input");
+  }
+
+  /** 在目标点击元素中心显示跟随位置的红色 marker */
+  async showAnchoredClickMarker(selector: string): Promise<void> {
+    return this.showAnchoredMarker(selector, "click");
   }
 
   /** 显示 scroll 位置标记（带方向箭头） */
@@ -268,6 +326,7 @@ export class ToolExecutor {
     else if (absY > 0) arrow = deltaY > 0 ? "↓" : "↑";
     const expression = `
       (function() {
+        window.__nekopilotMarkerToken = (window.__nekopilotMarkerToken || 0) + 1;
         let m = document.getElementById('__nekopilot-click-marker');
         if (m) m.remove();
         m = document.createElement('div');

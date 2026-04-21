@@ -20,6 +20,7 @@ export type AgentEventType =
   | "message"
   | "message_delta"
   | "message_to_thinking"
+  | "assistant_turn_done"
   | "error"
   | "done";
 

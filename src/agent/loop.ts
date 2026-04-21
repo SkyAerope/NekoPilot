@@ -274,6 +274,8 @@ export class AgentLoop {
 
     const toolCalls = Array.from(toolCallsMap.values()) as ToolCall[];
 
+    this.emit({ type: "assistant_turn_done", data: "" });
+
     return {
       role: "assistant",
       content: hasContent ? content : null,
@@ -489,6 +491,8 @@ export class AgentLoop {
       }
     }
 
+    this.emit({ type: "assistant_turn_done", data: "" });
+
     return {
       role: "assistant",
       content: hasContent ? content : null,
@@ -548,12 +552,9 @@ export class AgentLoop {
             const y = args.y as number | undefined;
             const sel = args.selector as string | undefined;
             if (sel) {
-              // selector 路径：解析元素中心点
-              const pos = await this.tools.resolveSelectorCenter(sel).catch(() => null);
-              if (pos) {
-                await this.tools.showClickMarker(pos.x, pos.y);
-                showedMarker = true;
-              }
+              // selector 路径：锚定元素，marker 会跟随元素位置变化
+              await this.tools.showAnchoredClickMarker(sel).catch(() => {});
+              showedMarker = true;
             } else if (x !== undefined && y !== undefined) {
               await this.tools.showClickMarker(x, y);
               showedMarker = true;

@@ -493,6 +493,25 @@ export default function App() {
         return;
       }
 
+      if (event.type === "assistant_turn_done") {
+        // 单轮 LLM 流结束：把仍未闭合的最后一条 thinking 强制收尾，避免无限转圈。
+        // 出现条件：模型只发了 <think> 没发 </think>，或通过 reasoning 通道发了思考但没有显式结束信号。
+        setLogs((prev) => {
+          const lastThink = prev.findLastIndex((l) => l.type === "thinking");
+          if (lastThink === -1) return prev;
+          const old = prev[lastThink];
+          if (old.thinkingDone) return prev;
+          const updated = [...prev];
+          updated[lastThink] = {
+            ...old,
+            thinkingDone: true,
+            thinkSeconds: old.thinkSeconds ?? Math.max(1, Math.round((Date.now() - old.timestamp) / 1000)),
+          };
+          return updated;
+        });
+        return;
+      }
+
       if (event.type === "error") {
         setLogs((prev) => [...prev, {
           id: ++logIdCounter,
