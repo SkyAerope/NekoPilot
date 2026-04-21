@@ -211,6 +211,9 @@ export class AgentLoop {
     let hasContent = false;
     // 追踪是否已经发过起始事件
     let messageStarted = false;
+    // reasoning_content / reasoning：DeepSeek、Kimi、Fireworks 等供应商的"思考"通道，
+    // 不会出现在最终 message.content 里，需要单独转发到 UI 的 thinking 事件。
+    let reasoningStarted = false;
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
@@ -239,6 +242,20 @@ export class AgentLoop {
 
         const delta = chunk.choices?.[0]?.delta;
         if (!delta) continue;
+
+        // reasoning_content（DeepSeek/Kimi/Fireworks）/ reasoning（部分供应商）：
+        // 单独的"思考"通道。转发到 thinking 事件，由前端独立渲染思考气泡。
+        const reasoningDelta: string | undefined =
+          (typeof delta.reasoning_content === "string" && delta.reasoning_content) ||
+          (typeof delta.reasoning === "string" && delta.reasoning) ||
+          undefined;
+        if (reasoningDelta) {
+          if (!reasoningStarted) {
+            this.emit({ type: "thinking", data: "" });
+            reasoningStarted = true;
+          }
+          this.emit({ type: "thinking_delta", data: reasoningDelta });
+        }
 
         // 累积 content — 统一以 message 流式发送。
         // 前端会检测到 <think> 标签后把该条目转为 thinking；无标签则视为普通 assistant 正文。

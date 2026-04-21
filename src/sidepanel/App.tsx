@@ -881,7 +881,7 @@ export default function App() {
           if (turn.kind === "user") {
             const seg = turn.segment;
             return (
-              <Box key={seg.entry.id} sx={{ mb: 2, mt: 1, "&:hover .hover-actions": { opacity: 1 } }}>
+              <Box key={seg.entry.id} sx={{ my: 1, "&:hover .hover-actions": { opacity: 1 } }}>
                 <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   <Typography variant="body2">{seg.entry.content}</Typography>
                   {seg.entry.pickedElements && seg.entry.pickedElements.length > 0 && (
