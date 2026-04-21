@@ -77,6 +77,24 @@ export class AgentLoop {
   }
 
   async run(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
+    // MV3 service worker 默认 30s 空闲就被终止。Agent 单轮可能跑几分钟：
+    // 如果 SW 在一次 await fetch 期间被挂起/重启，该 Promise 永远不会 resolve，
+    // 整个 loop 静默卡死（UI 看起来像"正常结束"但没有下一轮请求）。
+    // navigator.locks 持有期间 Chrome 不会终止 SW —— 这是官方推荐的保活 hack。
+    if (typeof navigator !== "undefined" && navigator.locks) {
+      // navigator.locks.request 的回调可返回 Promise；TS lib 的 LockGrantedCallback<T>
+      // 签名把 T 当作回调同步返回值，与实际运行时行为不符，这里走 any 绕过。
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (navigator.locks.request as any)(
+        "nekopilot-agent-run",
+        { mode: "exclusive" },
+        async () => this.runInner(history),
+      );
+    }
+    return this.runInner(history);
+  }
+
+  private async runInner(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
     this.messages = [
       { role: "system", content: SYSTEM_PROMPT + (this.config.enableShortRefs ? SHORT_REFS_HINT : "") },
       ...history,
@@ -98,6 +116,8 @@ export class AgentLoop {
       try {
         response = await this.callLlm();
       } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[NekoPilot] callLlm threw:", err);
         // 用户主动 abort：不要把 AbortError 当 LLM 错误透传
         if (this.aborted) {
           return finishWith("Agent was stopped.");
