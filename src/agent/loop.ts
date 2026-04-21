@@ -122,7 +122,7 @@ export class AgentLoop {
       return { text, messages: this.messages.slice(1) };
     };
 
-    for (let i = 0; i < this.config.maxIterations; i++) {
+    for (;;) {
       if (this.aborted) {
         return finishWith("Agent was stopped.");
       }
@@ -179,8 +179,6 @@ export class AgentLoop {
         return finishWith("Agent was stopped.");
       }
     }
-
-    return finishWith("达到最大迭代次数，Agent 停止。");
   }
 
   /**

@@ -4,7 +4,6 @@ export interface AgentConfig {
   apiKey: string;
   baseUrl: string;
   model: string;
-  maxIterations: number;
   permissionMode: "ask" | "auto";
   showClickMarker: boolean;
   provider: "openai" | "anthropic";
