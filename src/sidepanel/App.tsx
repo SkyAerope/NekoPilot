@@ -949,7 +949,7 @@ export default function App() {
         {running && (logs.length === 0 || logs[logs.length - 1].type === "user") && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 1, pl: 0.5 }}>
             <CircularProgress size={14} />
-            <Typography variant="body2" sx={{ opacity: 0.5 }}>思考中...</Typography>
+            <Typography variant="body2" sx={{ opacity: 0.5 }}>正在工作…</Typography>
           </Box>
         )}
         <div ref={logsEndRef} />
@@ -1177,7 +1177,9 @@ function StepsGroup({
           alignItems: "center",
           gap: 0.5,
           cursor: "pointer",
-          py: 0.5,
+          // py:1 让"标题 ↔ 首个 step"与"step ↔ step"间距一致（都 8px），
+          // 收缩状态下标题与上下文本的距离也对称。
+          py: 1,
           "&:hover": { opacity: 0.8 },
           userSelect: "none",
         }}
@@ -1348,9 +1350,9 @@ function TimelineStep({
         {entry.type === "pending" && (
           <Typography
             variant="body2"
-            sx={{ color: "text.secondary", fontStyle: "italic", opacity: 0.7, lineHeight: "20px" }}
+            sx={{ color: "text.secondary", opacity: 0.7, lineHeight: "20px" }}
           >
-            等待模型回复…
+            正在工作…
           </Typography>
         )}
       </Box>
