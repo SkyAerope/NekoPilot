@@ -6,7 +6,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "screenshot",
     description:
-      "截取当前页面的屏幕截图，返回 base64 编码的 PNG 图片。",
+      "截取当前页面的屏幕截图，返回 base64 编码的图片（默认 JPEG，质量由用户在设置中配置；100% 质量时为 PNG 无损）。",
     parameters: {},
   },
   {
@@ -33,7 +33,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "read_page_interactive",
     description:
-      "读取当前页面中所有可见的可交互元素（a/button/input/select/textarea/[role]/[onclick] 等）。每项包含：selector（可直接用于 click/set_input 的 CSS 选择器）、tag、type、role、text、placeholder、value、position（视口坐标与尺寸）、center（中心点坐标，可作 click 的 x/y）。",
+      "读取当前页面中所有可见的可交互元素（a/button/input/select/textarea/[role]/[onclick] 等）。每项包含：selector（可直接传给 click / set_input / get_element_text / get_element_rect 的 selector 参数；启用短引用时为形如 \"#1\"、\"#2\" 的短引用，否则为真实 CSS 选择器）、tag、type、role、text、placeholder、value、position（视口坐标与尺寸）、center（中心点坐标，可作 click 的 x/y）。",
     parameters: {},
   },
   {
@@ -42,7 +42,7 @@ export const toolDefinitions: ToolDefinition[] = [
     parameters: {
       x: { type: "number", description: "点击位置的 X 坐标（与 selector 二选一）" },
       y: { type: "number", description: "点击位置的 Y 坐标（与 selector 二选一）" },
-      selector: { type: "string", description: "目标元素的 CSS 选择器，点击其中心位置" },
+      selector: { type: "string", description: "目标元素的 CSS 选择器；也接受 read_page_interactive / find_element 返回的 #n 短引用" },
       jsClick: {
         type: "boolean",
         description: "默认 false，使用 CDP 派发真实鼠标事件；设为 true 时改用页面端 element.click()，适合被遮挡或非标准事件处理的元素",
@@ -55,7 +55,7 @@ export const toolDefinitions: ToolDefinition[] = [
     parameters: {
       selector: {
         type: "string",
-        description: "目标元素的 CSS 选择器",
+        description: "目标元素的 CSS 选择器；也接受 read_page_interactive / find_element 返回的 #n 短引用",
       },
       value: { type: "string", description: "要输入的文本" },
       jsSet: {
@@ -110,7 +110,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "find_element",
     description:
-      "根据文本内容搜索页面中的元素。返回匹配元素列表，每项包含：tag（标签名）、text（截断文本）、selector（可直接用于 click/set_input 的 CSS 选择器）、position（元素在视口内的位置与尺寸，单位 px）、center（元素中心点坐标，可直接作为 click 的 x/y）。",
+      "根据文本内容搜索页面中的元素。返回匹配元素列表，每项包含：tag（标签名）、text（截断文本）、selector（可直接传给 click / set_input / get_element_text / get_element_rect 的 selector 参数；启用短引用时为形如 \"#1\"、\"#2\" 的短引用，否则为真实 CSS 选择器）、position（元素在视口内的位置与尺寸，单位 px）、center（元素中心点坐标，可直接作为 click 的 x/y）。",
     parameters: {
       text: {
         type: "string",
@@ -134,7 +134,7 @@ export const toolDefinitions: ToolDefinition[] = [
     parameters: {
       selector: {
         type: "string",
-        description: "目标元素的 CSS 选择器",
+        description: "目标元素的 CSS 选择器；也接受 read_page_interactive / find_element 返回的 #n 短引用",
       },
       limit: {
         type: "integer",
@@ -154,7 +154,7 @@ export const toolDefinitions: ToolDefinition[] = [
     parameters: {
       selector: {
         type: "string",
-        description: "目标元素的 CSS 选择器",
+        description: "目标元素的 CSS 选择器；也接受 read_page_interactive / find_element 返回的 #n 短引用",
       },
     },
     required: ["selector"],

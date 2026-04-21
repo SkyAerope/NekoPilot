@@ -40,39 +40,36 @@ export class ToolExecutor {
 
   /**
    * 对 readPageInteractive / findElement 返回的 YAML 文本做后处理：
-   * 为每条列表项的 selector 行分配一个 #n 短引用，并在同缩进层插入 ref: "#n"。
+   * 将每条列表项的 selector 值替换为分配到的 #n 短引用（真实 selector 保存在 shortRefMap，
+   * 后续 click/set_input 等调用时由 resolveShortRef 还原）。
    * 禁用短引用时直接返回原文。
    */
   private annotateShortRefs(text: string): string {
     if (!this.shortRefsEnabled) return text;
     const lines = text.split("\n");
-    const out: string[] = [];
-    // 匹配形如 `  selector: "xxx"` 或 `- selector: "xxx"`（可能前导 `- ` 或空格）
-    const re = /^(\s*-?\s*)selector:\s*(".*"|'.*'|[^\s].*)$/;
-    for (const line of lines) {
-      out.push(line);
-      const m = line.match(re);
-      if (!m) continue;
-      const indentPart = m[1];
-      // 解析 selector 值（优先 JSON.parse，失败则保留原串去引号）
-      let rawVal = m[2].trim();
-      let selector: string;
-      try {
-        selector = JSON.parse(rawVal);
-      } catch {
-        if ((rawVal.startsWith('"') && rawVal.endsWith('"')) || (rawVal.startsWith("'") && rawVal.endsWith("'"))) {
-          selector = rawVal.slice(1, -1);
-        } else {
-          selector = rawVal;
+    // 匹配形如 `- selector: "xxx"` 或 `  selector: "xxx"` 的行，捕获前缀与原值
+    const re = /^(\s*-?\s*selector:\s*)(".*"|'.*'|\S.*)$/;
+    return lines
+      .map((line) => {
+        const m = line.match(re);
+        if (!m) return line;
+        const prefix = m[1];
+        const rawVal = m[2].trim();
+        let selector: string;
+        try {
+          selector = JSON.parse(rawVal);
+        } catch {
+          if ((rawVal.startsWith('"') && rawVal.endsWith('"')) || (rawVal.startsWith("'") && rawVal.endsWith("'"))) {
+            selector = rawVal.slice(1, -1);
+          } else {
+            selector = rawVal;
+          }
         }
-      }
-      if (!selector) continue;
-      const ref = this.allocShortRef(selector);
-      // 保持同层缩进：若 indentPart 含 `- `，后续字段应用等长空白
-      const sameIndent = indentPart.replace(/-\s/g, "  ");
-      out.push(`${sameIndent}ref: ${JSON.stringify(ref)}`);
-    }
-    return out.join("\n");
+        if (!selector) return line;
+        const ref = this.allocShortRef(selector);
+        return `${prefix}${JSON.stringify(ref)}`;
+      })
+      .join("\n");
   }
 
   /** 安全执行 JS 表达式，检查 CDP exceptionDetails */

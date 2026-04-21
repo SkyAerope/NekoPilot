@@ -23,15 +23,17 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 注意：
 - 坐标基于页面视口左上角
 - 使用 read_page_interactive 获取可交互元素列表更高效
+- 尽量在一个回复中同时进行多次工具调用，这些工具调用会按顺序执行。
 - 如果CDP使用失败，尝试使用 jsClick 或 jsSet 。
 - 每次操作后用 screenshot 确认结果
 - 如果操作失败，尝试其他方法`;
+
 const SHORT_REFS_HINT = `
 
 元素短引用（#n）：
-- read_page_interactive / find_element 返回的每个元素都附带 ref 字段，形如 "#1"、"#2"。
-- 在后续 click / set_input / get_element_text / get_element_rect 等工具的 selector 参数中，你可以直接填写这些 #n 值，扩展会自动还原成真实 CSS 选择器。
-- 这样可以显著节省 token，也更不易因长选择器转义出错。优先使用 #n 而非完整选择器。`;
+- read_page_interactive / find_element 返回项中的 selector 字段不再是真实 CSS 选择器，而是形如 "#1"、"#2" 的短引用。
+- 在后续 click / set_input / get_element_text / get_element_rect 等工具调用中，把这些 #n 直接作为 selector 参数传入即可，扩展会自动还原为真实 CSS 选择器。
+- 这能显著节省 token，也避免长选择器的转义问题。仅当你需要操作未出现在最近一次 read_page_interactive / find_element 结果中的元素时，才需要自己写 CSS 选择器。`;
 export class AgentLoop {
   private messages: ChatMessage[] = [];
   private aborted = false;

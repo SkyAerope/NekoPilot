@@ -1413,11 +1413,12 @@ function ToolCallStep({
         onClick={hasResult ? onToggle : undefined}
         sx={{
           display: "flex", alignItems: "center", gap: 0.75,
+          flexWrap: "nowrap", minWidth: 0,
           cursor: hasResult ? "pointer" : "default",
           "&:hover": hasResult ? { opacity: 0.8 } : {},
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px" }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px", whiteSpace: "nowrap", flexShrink: 0 }}>
           {getToolLabel(entry.toolName)}
         </Typography>
         {(() => {
@@ -1425,7 +1426,7 @@ function ToolCallStep({
           return subtitle ? (
             <Typography
               variant="caption"
-              sx={{ color: "text.secondary", opacity: 0.7, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, maxWidth: 300 }}
+              sx={{ color: "text.secondary", opacity: 0.7, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "1 1 auto" }}
             >
               {subtitle}
             </Typography>
