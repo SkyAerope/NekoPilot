@@ -67,7 +67,7 @@ interface Attachment {
 
 interface LogEntry {
   id: number;
-  type: "user" | "assistant" | "thinking" | "tool_call" | "error";
+  type: "user" | "assistant" | "thinking" | "tool_call" | "error" | "pending";
   content: string;
   timestamp: number;
   toolName?: string;
@@ -904,7 +904,7 @@ export default function App() {
           }).filter(Boolean).join("\n\n");
           return (
             <Box key={turn.firstId} sx={{ mb: 2, "&:hover > .hover-actions": { opacity: 1 } }}>
-              {turn.segments.map((seg) => {
+              {turn.segments.map((seg, segIdx) => {
                 if (seg.kind === "assistant") {
                   return (
                     <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
@@ -914,6 +914,14 @@ export default function App() {
                 }
                 if (seg.kind === "steps") {
                   const groupKey = seg.entries[0].id;
+                  // 当本轮 turn 仍在运行，且当前 steps 是该 turn 最后一个 segment，
+                  // 且最后一个 step 是已完成的 tool_call（有 toolResult）——说明
+                  // 模型刚拿到工具结果、正在准备下一轮回复，此时挂一个 pending 占位 step。
+                  const isLastSeg = segIdx === turn.segments.length - 1;
+                  const lastEntry = seg.entries[seg.entries.length - 1];
+                  const lastIsCompletedTool = lastEntry?.type === "tool_call" && lastEntry.toolResult !== undefined;
+                  const lastIsDoneThinking = lastEntry?.type === "thinking" && lastEntry.thinkingDone === true;
+                  const showPending = isLast && running && isLastSeg && (lastIsCompletedTool || lastIsDoneThinking);
                   return (
                     <StepsGroup
                       key={groupKey}
@@ -923,6 +931,7 @@ export default function App() {
                       onApprove={handleApprove}
                       onReject={handleReject}
                       onDismiss={handleDismissLog}
+                      pending={showPending}
                     />
                   );
                 }
@@ -1115,6 +1124,7 @@ function StepsGroup({
   onApprove,
   onReject,
   onDismiss,
+  pending,
 }: {
   entries: LogEntry[];
   expanded: boolean;
@@ -1122,30 +1132,43 @@ function StepsGroup({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onDismiss: (id: number) => void;
+  /** 模型正在生成下一轮回复时显示一个 spinner 占位 step */
+  pending?: boolean;
 }) {
-  const stepCount = entries.filter((e) => e.type === "tool_call" || e.type === "thinking").length;
+  const stepCount = entries.filter((e) => e.type === "tool_call" || e.type === "thinking").length + (pending ? 1 : 0);
 
   // 只有 1 步时直接显示，不包裹
   if (stepCount <= 1) {
     return (
-      <Box sx={{ mb: 1 }}>
+      <Box>
         {entries.map((entry, i) => (
           <TimelineStep
             key={entry.id}
             entry={entry}
             showTopLine={i > 0}
-            showBottomLine={i < entries.length - 1}
+            showBottomLine={i < entries.length - 1 || !!pending}
             onApprove={onApprove}
             onReject={onReject}
             onDismiss={onDismiss}
           />
         ))}
+        {pending && (
+          <TimelineStep
+            key="__pending__"
+            entry={{ id: -1, type: "pending", content: "", timestamp: Date.now() }}
+            showTopLine={entries.length > 0}
+            showBottomLine={false}
+            onApprove={onApprove}
+            onReject={onReject}
+            onDismiss={onDismiss}
+          />
+        )}
       </Box>
     );
   }
 
   return (
-    <Box sx={{ mb: 1 }}>
+    <Box>
       {/* 可折叠标题 */}
       <Box
         onClick={onToggle}
@@ -1179,12 +1202,23 @@ function StepsGroup({
             key={entry.id}
             entry={entry}
             showTopLine={i > 0}
-            showBottomLine={i < entries.length - 1}
+            showBottomLine={i < entries.length - 1 || !!pending}
             onApprove={onApprove}
             onReject={onReject}
             onDismiss={onDismiss}
           />
         ))}
+        {pending && (
+          <TimelineStep
+            key="__pending__"
+            entry={{ id: -1, type: "pending", content: "", timestamp: Date.now() }}
+            showTopLine={entries.length > 0}
+            showBottomLine={false}
+            onApprove={onApprove}
+            onReject={onReject}
+            onDismiss={onDismiss}
+          />
+        )}
       </Collapse>
     </Box>
   );
@@ -1219,6 +1253,8 @@ function TimelineStep({
       <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main" }} />
     ) : entry.type === "thinking" ? (
       <PsychologyAltOutlinedIcon sx={{ fontSize: 16, color: "text.secondary" }} />
+    ) : entry.type === "pending" ? (
+      <CircularProgress size={12} sx={{ color: "text.secondary" }} />
     ) : (
       <Box sx={{ color: "text.secondary", display: "flex" }}>{getToolIcon(entry.toolName)}</Box>
     );
@@ -1307,6 +1343,15 @@ function TimelineStep({
               <CloseIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Box>
+        )}
+
+        {entry.type === "pending" && (
+          <Typography
+            variant="body2"
+            sx={{ color: "text.secondary", fontStyle: "italic", opacity: 0.7, lineHeight: "20px" }}
+          >
+            等待模型回复…
+          </Typography>
         )}
       </Box>
     </Box>
