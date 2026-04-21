@@ -119,7 +119,19 @@ export class AgentLoop {
       const deferredMessages: ChatMessage[] = [];
       for (const toolCall of response.tool_calls) {
         if (this.aborted) break;
-        await this.executeToolCall(toolCall, deferredMessages);
+        try {
+          await this.executeToolCall(toolCall, deferredMessages);
+        } catch (err) {
+          // 工具执行抛异常（执行器 bug、CDP 断开等）：补一条失败 tool_result
+          // 让 LLM 知道这次调用挂了，避免后续出现 tool_use 无对应 tool_result 的 400。
+          // 同时把错误抛到 UI，避免静默吞掉。
+          // eslint-disable-next-line no-console
+          console.error("[NekoPilot] executeToolCall threw:", toolCall.function?.name, err);
+          const failed = { success: false, error: `tool execution threw: ${String(err)}` };
+          this.emit({ type: "tool_result", data: { name: toolCall.function?.name ?? "unknown", result: failed, id: toolCall.id } });
+          this.emit({ type: "error", data: `工具 ${toolCall.function?.name} 执行抛错：${String(err)}` });
+          this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(failed) });
+        }
       }
       this.messages.push(...deferredMessages);
 
@@ -189,6 +201,11 @@ export class AgentLoop {
       tools: functions,
       stream: true,
     };
+
+    // eslint-disable-next-line no-console
+    console.log("[NekoPilot] LLM request — messages:", this.messages.length,
+      "last:", this.messages[this.messages.length - 1]?.role,
+      "tools:", functions.length);
 
     const resp = await fetch(`${this.config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -291,6 +308,10 @@ export class AgentLoop {
     }
 
     const toolCalls = Array.from(toolCallsMap.values()) as ToolCall[];
+
+    // eslint-disable-next-line no-console
+    console.log("[NekoPilot] LLM response \u2014 contentLen:", content.length,
+      "toolCalls:", toolCalls.map(t => t.function.name));
 
     this.emit({ type: "assistant_turn_done", data: "" });
 

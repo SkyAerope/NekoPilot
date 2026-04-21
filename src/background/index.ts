@@ -70,10 +70,20 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       agentLoop = new AgentLoop(tools, config, (event) => {
         chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
       });
-      const { text, messages } = await agentLoop.run(conversationHistory);
-      conversationHistory = messages;
-      agentLoop = null;
-      return { result: text };
+      try {
+        const { text, messages } = await agentLoop.run(conversationHistory);
+        conversationHistory = messages;
+        agentLoop = null;
+        return { result: text };
+      } catch (err) {
+        // 任何未在 loop 内捕获的异常：明确告知 UI，否则前端 running 会卡住或静默回到 idle
+        // eslint-disable-next-line no-console
+        console.error("[NekoPilot] agentLoop.run threw:", err);
+        chrome.runtime.sendMessage({ type: "agent:event", payload: { type: "error", data: `Agent crashed: ${String(err)}` } }).catch(() => {});
+        chrome.runtime.sendMessage({ type: "agent:event", payload: { type: "done", data: "" } }).catch(() => {});
+        agentLoop = null;
+        throw err;
+      }
     }
     case "agent:stop": {
       if (agentLoop) {
