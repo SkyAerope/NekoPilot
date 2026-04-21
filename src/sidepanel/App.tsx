@@ -1359,19 +1359,22 @@ function ThinkingStep({
       >
         <Typography
           variant="body2"
-          sx={{ fontWeight: 500, color: "text.secondary", fontStyle: done ? "normal" : "italic", lineHeight: "20px" }}
+          sx={{ fontWeight: 500, color: "text.secondary", fontStyle: done ? "normal" : "italic", lineHeight: "20px", whiteSpace: "nowrap", flexShrink: 0 }}
         >
           {label}
         </Typography>
-        {!done && <CircularProgress size={12} />}
-        {!expanded && preview && (
+        {!expanded && preview ? (
           <Typography
             variant="caption"
-            sx={{ opacity: 0.4, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}
+            sx={{ opacity: 0.4, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "1 1 auto" }}
           >
             {preview}
           </Typography>
+        ) : (
+          // 占位，保证后面 spinner / 箭头始终右对齐
+          <Box sx={{ flex: "1 1 auto", minWidth: 0 }} />
         )}
+        {!done && <CircularProgress size={12} sx={{ flexShrink: 0 }} />}
         {hasContent && (
           <ExpandMoreIcon
             sx={{
@@ -1379,7 +1382,7 @@ function ThinkingStep({
               transform: expanded ? "rotate(180deg)" : "none",
               transition: "transform 0.2s",
               opacity: 0.4,
-              ml: "auto",
+              flexShrink: 0,
             }}
           />
         )}
@@ -1449,16 +1452,19 @@ function ToolCallStep({
             >
               {subtitle}
             </Typography>
-          ) : null;
+          ) : (
+            // 占位，让右侧图标与箭头始终右对齐
+            <Box sx={{ flex: "1 1 auto", minWidth: 0 }} />
+          );
         })()}
 
-        {isExecuting && <CircularProgress size={12} />}
+        {isExecuting && <CircularProgress size={12} sx={{ flexShrink: 0 }} />}
 
         {hasResult && entry.toolSuccess && (
-          <CheckCircleOutlineIcon sx={{ fontSize: 14, color: "success.main" }} />
+          <CheckCircleOutlineIcon sx={{ fontSize: 14, color: "success.main", flexShrink: 0 }} />
         )}
         {hasResult && !entry.toolSuccess && (
-          <ErrorOutlineIcon sx={{ fontSize: 14, color: "error.main" }} />
+          <ErrorOutlineIcon sx={{ fontSize: 14, color: "error.main", flexShrink: 0 }} />
         )}
 
         {hasResult && (
@@ -1468,6 +1474,7 @@ function ToolCallStep({
               transform: expanded ? "rotate(180deg)" : "none",
               transition: "transform 0.2s",
               opacity: 0.4,
+              flexShrink: 0,
             }}
           />
         )}

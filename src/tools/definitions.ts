@@ -6,13 +6,13 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "screenshot",
     description:
-      "截取当前页面的屏幕截图，返回 base64 编码的 PNG 图片。",
+      "截取当前页面的屏幕截图，返回 base64 编码的图片。",
     parameters: {},
   },
   {
     name: "read_page_text",
     description:
-      "读取当前页面的纯文本内容（document.body.innerText）。可通过 limit 和 offset 控制返回范围。",
+      "读取当前页面的纯文本内容（document.body.innerText）。",
     parameters: {
       limit: {
         type: "integer",
@@ -38,7 +38,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "click",
-    description: "在指定坐标或选择器指定的元素上执行点击。传入 selector 时点击该元素中央，此时 x/y 可省略。点击前会自动滚动页面至元素可见的位置。",
+    description: "在指定坐标或选择器指定的元素中央执行点击。点击前会自动滚动页面至元素可见的位置。坐标与选择器二选一。",
     parameters: {
       x: { type: "number", description: "点击位置的 X 坐标（与 selector 二选一）" },
       y: { type: "number", description: "点击位置的 Y 坐标（与 selector 二选一）" },
@@ -51,7 +51,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "set_input",
-    description: "聚焦指定元素并输入文本。输入前会自动滚动页面至元素可见的位置并 focus。",
+    description: "聚焦指定元素并输入文本。输入前会自动滚动页面至元素可见的位置。",
     parameters: {
       selector: {
         type: "string",
