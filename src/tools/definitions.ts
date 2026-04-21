@@ -71,8 +71,8 @@ export const toolDefinitions: ToolDefinition[] = [
     parameters: {
       x: { type: "number", description: "滚动起始 X 坐标" },
       y: { type: "number", description: "滚动起始 Y 坐标" },
-      deltaX: { type: "number", description: "水平滚动坐标量" },
-      deltaY: { type: "number", description: "垂直滚动坐标量" },
+      deltaX: { type: "number", description: "水平滚动坐标量，正为右" },
+      deltaY: { type: "number", description: "垂直滚动坐标量，正为下" },
     },
     required: ["x", "y", "deltaY"],
   },

@@ -447,10 +447,25 @@ export default function App() {
                   ? { data: data.result.data as string, mime: "image/png" }
                   : (data.result.data as { data: string; mime: string }))
               : null;
+            // 工具 runtime 没抛错并不代表语义上成功：例如 find_element 返回
+            // "no_results: ..." 字符串、或对象内 status === "no_results" / "error"。
+            // 这里识别这些"软失败"，让 UI 显示叉叉。
+            let semanticSuccess = data.result.success;
+            if (semanticSuccess) {
+              const d = data.result.data;
+              if (typeof d === "string") {
+                if (/^(no_results|not_found|error)\b/i.test(d.trim())) semanticSuccess = false;
+              } else if (d && typeof d === "object") {
+                const status = (d as { status?: unknown }).status;
+                if (typeof status === "string" && /^(no_results|not_found|error|failed)$/i.test(status)) {
+                  semanticSuccess = false;
+                }
+              }
+            }
             return {
               ...log,
               toolResult: formatted,
-              toolSuccess: data.result.success,
+              toolSuccess: semanticSuccess,
               screenshotData: shotInfo?.data,
               screenshotMime: shotInfo?.mime,
             };
@@ -1178,9 +1193,8 @@ function StepsGroup({
           alignItems: "center",
           gap: 0.5,
           cursor: "pointer",
-          // py:1 让"标题 ↔ 首个 step"与"step ↔ step"间距一致（都 8px），
-          // 收缩状态下标题与上下文本的距离也对称。
-          py: 1,
+          pt: 1,
+          pb: 1.5,
           "&:hover": { opacity: 0.8 },
           userSelect: "none",
         }}
