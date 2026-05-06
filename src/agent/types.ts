@@ -17,6 +17,7 @@ export interface AgentConfig {
 export type AgentEventType =
   | "thinking"
   | "thinking_delta"
+  | "tool_call_streaming"
   | "tool_call"
   | "tool_result"
   | "message"

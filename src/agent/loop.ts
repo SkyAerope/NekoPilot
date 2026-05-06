@@ -253,6 +253,7 @@ export class AgentLoop {
     let hasContent = false;
     // 追踪是否已经发过起始事件
     let messageStarted = false;
+    let toolCallStreamingStarted = false;
     // reasoning_content / reasoning：DeepSeek、Kimi、Fireworks 等供应商的"思考"通道，
     // 不会出现在最终 message.content 里，需要单独转发到 UI 的 thinking 事件。
     let reasoningStarted = false;
@@ -326,6 +327,10 @@ export class AgentLoop {
 
         // 累积 tool_calls
         if (delta.tool_calls) {
+          if (!toolCallStreamingStarted) {
+            this.emit({ type: "tool_call_streaming", data: "正在生成工具调用…" });
+            toolCallStreamingStarted = true;
+          }
           for (const tc of delta.tool_calls) {
             const idx = tc.index ?? 0;
             if (!toolCallsMap.has(idx)) {
@@ -502,6 +507,7 @@ export class AgentLoop {
     // Anthropic usage：message_start 给 input_tokens，message_delta 累计 output_tokens
     let inputTokens = 0;
     let outputTokens = 0;
+    let toolCallStreamingStarted = false;
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
@@ -545,6 +551,10 @@ export class AgentLoop {
           const block = event.content_block;
           currentBlockType = block.type;
           if (block.type === "tool_use") {
+            if (!toolCallStreamingStarted) {
+              this.emit({ type: "tool_call_streaming", data: "正在生成工具调用…" });
+              toolCallStreamingStarted = true;
+            }
             currentToolId = block.id;
             currentToolName = block.name;
             currentToolArgs = "";

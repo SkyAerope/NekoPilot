@@ -428,6 +428,12 @@ function normalizeBracketMath(content: string): string {
     return line.replace(/(^|[^!])\[([^\]\n]+)\](?!\()/g, (match, prefix: string, expression: string) => {
       const math = expression.trim();
       if (!isLikelyBracketMath(math)) return match;
+      const before = prefix.trimEnd();
+      const isWholeLineMath = /^\s*(?:[-*+]\s*|\d+[.)]\s*)?$/.test(prefix)
+        && line.slice(line.indexOf(match) + match.length).trim() === "";
+      if (isWholeLineMath) {
+        return `${before ? `${before} ` : ""}\n$$\n${math}\n$$`;
+      }
       return `${prefix}$${math}$`;
     });
   }).join("\n");
@@ -436,7 +442,7 @@ function normalizeBracketMath(content: string): string {
 function isLikelyBracketMath(expression: string): boolean {
   if (!expression || expression.length > 300) return false;
   if (/^https?:\/\//i.test(expression)) return false;
-  return /\\[A-Za-z]+|[_^=]|\b(?:det|sin|cos|tan|log|ln)\s*\(/.test(expression);
+  return /\\[A-Za-z]+|[_^=|]|\b(?:det|sin|cos|tan|log|ln)\s*\(/.test(expression);
 }
 
 function escapeInvalidMathBlocks(content: string): string {
@@ -681,7 +687,9 @@ export default function App() {
   /** 最近一次 LLM 响应的 prompt token 数——代表"当前上下文占用"。
    *  每轮请求都会刷新，UI 把它显示在工具栏让用户知道还剩多少预算。 */
   const [promptTokens, setPromptTokens] = useState<number | null>(null);
+  const logsBoxRef = useRef<HTMLDivElement>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 加载持久化设置
@@ -715,8 +723,21 @@ export default function App() {
         return;
       }
 
+      if (event.type === "tool_call_streaming") {
+        setLogs((prev) => {
+          if (prev[prev.length - 1]?.type === "pending") return prev;
+          return [...prev, {
+            id: ++logIdCounter,
+            type: "pending",
+            content: typeof event.data === "string" ? event.data : "正在生成工具调用…",
+            timestamp: Date.now(),
+          }];
+        });
+        return;
+      }
+
       if (event.type === "message") {
-        setLogs((prev) => [...prev, {
+        setLogs((prev) => [...prev.filter((log) => log.type !== "pending"), {
           id: ++logIdCounter,
           type: "assistant",
           content: typeof event.data === "string" ? event.data : JSON.stringify(event.data),
@@ -828,7 +849,7 @@ export default function App() {
 
       if (event.type === "tool_call") {
         const data = event.data as { name: string; args: string; id: string; needsPermission?: boolean };
-        setLogs((prev) => [...prev, {
+        setLogs((prev) => [...prev.filter((log) => log.type !== "pending"), {
           id: ++logIdCounter,
           type: "tool_call",
           content: data.args,
@@ -960,9 +981,21 @@ export default function App() {
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
-  // 自动滚动
+  const handleLogsScroll = useCallback(() => {
+    const el = logsBoxRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceToBottom < 48;
+  }, []);
+
+  // 自动滚动：只有用户仍停在底部附近时才跟随；用户向上滚动后暂停，直到再次滚到底部。
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!stickToBottomRef.current) return;
+    const el = logsBoxRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
   }, [logs]);
 
   // 检查连接状态
@@ -1306,7 +1339,7 @@ export default function App() {
       </AppBar>
 
       {/* 对话区 */}
-      <Box sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
+      <Box ref={logsBoxRef} onScroll={handleLogsScroll} sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
         {turns.map((turn) => {
           if (turn.kind === "user") {
             const seg = turn.segment;
