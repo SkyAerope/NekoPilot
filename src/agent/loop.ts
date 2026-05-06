@@ -29,6 +29,12 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 - 点击时禁止猜测坐标。优先使用工具返回的选择器，其次是坐标。
 - 点击与输入操作会在操作前**自动**将目标滚动至视口内，**无需手动滚动**。请在自动滚动未生效时，再使用手动滚动。`;
 
+const CODE_EXECUTION_HINT = `
+
+代码执行（execute_js）：
+- execute_js 是纯计算沙箱：没有 DOM、没有网络、没有 Chrome API，适合做字符串处理、JSON 转换、正则提取和小型数据整理。
+- 调用 execute_js 时必须同时提供 description 和 code。description 要说明代码意图；code 只写函数体，不要包一层 function。`;
+
 const SHORT_REFS_HINT = `
 
 元素短引用（#n）：
@@ -96,7 +102,12 @@ export class AgentLoop {
 
   private async runInner(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
     this.messages = [
-      { role: "system", content: SYSTEM_PROMPT + (this.config.enableShortRefs ? SHORT_REFS_HINT : "") },
+      {
+        role: "system",
+        content: SYSTEM_PROMPT
+          + (this.config.enableCodeExecution !== false ? CODE_EXECUTION_HINT : "")
+          + (this.config.enableShortRefs ? SHORT_REFS_HINT : ""),
+      },
       ...history,
     ];
 
@@ -209,7 +220,7 @@ export class AgentLoop {
   }
 
   private async callLlmOpenAI(): Promise<ChatMessage> {
-    const functions = toolDefinitions.map(toOpenAiFunction);
+    const functions = this.getAvailableToolDefinitions().map(toOpenAiFunction);
 
     const body = {
       model: this.config.model,
@@ -449,7 +460,7 @@ export class AgentLoop {
   }
 
   private async callLlmAnthropic(): Promise<ChatMessage> {
-    const tools = toolDefinitions.map(toAnthropicTool);
+    const tools = this.getAvailableToolDefinitions().map(toAnthropicTool);
     const { system, messages } = this.convertMessagesForAnthropic();
 
     const body = {
@@ -590,6 +601,15 @@ export class AgentLoop {
       content: hasContent ? content : null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     } as ChatMessage;
+  }
+
+  private getAvailableToolDefinitions() {
+    return toolDefinitions.filter((tool) => {
+      if (tool.name === "execute_js") {
+        return this.config.enableCodeExecution !== false;
+      }
+      return true;
+    });
   }
 
   private static readonly READONLY_TOOLS = new Set([

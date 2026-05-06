@@ -9,6 +9,9 @@ export interface AgentConfig {
   provider: "openai" | "anthropic";
   enableShortRefs: boolean;
   screenshotQuality: number;
+  enableCodeExecution: boolean;
+  codeExecutionTimeoutMs: number;
+  codeExecutionMaxOutputChars: number;
 }
 
 export type AgentEventType =

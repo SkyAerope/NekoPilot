@@ -1,9 +1,15 @@
 // Tool 执行器 — 将 tool 调用映射到具体 CDP 操作
 
 import type { CdpManager } from "../background/cdp";
+import { JsSandbox } from "./jsSandbox";
 import type { ToolResult } from "./types";
 
 export class ToolExecutor {
+  private sandbox = new JsSandbox();
+  private codeExecutionEnabled = true;
+  private codeExecutionTimeoutMs = 1000;
+  private codeExecutionMaxOutputChars = 6000;
+
   constructor(private cdp: CdpManager) {}
 
   // ── 短引用（#n）支持 ──
@@ -19,6 +25,19 @@ export class ToolExecutor {
   }
   configureScreenshotQuality(quality: number): void {
     this.screenshotQuality = Math.max(10, Math.min(100, Math.round(quality)));
+  }
+  configureCodeExecution(options: {
+    enabled?: boolean;
+    timeoutMs?: number;
+    maxOutputChars?: number;
+  }): void {
+    this.codeExecutionEnabled = options.enabled !== false;
+    if (typeof options.timeoutMs === "number") {
+      this.codeExecutionTimeoutMs = Math.max(50, Math.round(options.timeoutMs));
+    }
+    if (typeof options.maxOutputChars === "number") {
+      this.codeExecutionMaxOutputChars = Math.max(256, Math.round(options.maxOutputChars));
+    }
   }
   resetShortRefs(): void {
     this.shortRefMap.clear();
@@ -102,6 +121,11 @@ export class ToolExecutor {
     params: Record<string, unknown>
   ): Promise<unknown> {
     switch (name) {
+      case "execute_js":
+        return this.executeJs(
+          params.description as string,
+          params.code as string,
+        );
       case "screenshot":
         return this.screenshot();
       case "read_page_text":
@@ -368,6 +392,21 @@ export class ToolExecutor {
       params
     );
     return { data: result.data, mime: useJpeg ? "image/jpeg" : "image/png" };
+  }
+
+  private async executeJs(description: string, code: string): Promise<{
+    result: unknown;
+    logs: string[];
+    truncated: boolean;
+    timeoutMs: number;
+  }> {
+    if (!this.codeExecutionEnabled) {
+      throw new Error("代码执行工具当前已禁用");
+    }
+    return this.sandbox.execute(code, description, {
+      timeoutMs: this.codeExecutionTimeoutMs,
+      maxOutputChars: this.codeExecutionMaxOutputChars,
+    });
   }
 
   private async readPageText(limit: number, offset: number): Promise<string> {

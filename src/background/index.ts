@@ -67,6 +67,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       conversationHistory.push({ role: "user", content: userMessage });
       tools.configureShortRefs(config.enableShortRefs !== false);
       tools.configureScreenshotQuality(typeof config.screenshotQuality === "number" ? config.screenshotQuality : 80);
+      tools.configureCodeExecution({
+        enabled: config.enableCodeExecution !== false,
+        timeoutMs: typeof config.codeExecutionTimeoutMs === "number" ? config.codeExecutionTimeoutMs : 1000,
+        maxOutputChars: typeof config.codeExecutionMaxOutputChars === "number" ? config.codeExecutionMaxOutputChars : 6000,
+      });
       agentLoop = new AgentLoop(tools, config, (event) => {
         chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
       });

@@ -38,6 +38,9 @@ interface Settings {
   showClickMarker: boolean;
   enableShortRefs: boolean;
   screenshotQuality: number;
+  enableCodeExecution: boolean;
+  codeExecutionTimeoutMs: number;
+  codeExecutionMaxOutputChars: number;
 }
 
 const defaultSettings: Settings = {
@@ -49,11 +52,9 @@ const defaultSettings: Settings = {
   showClickMarker: true,
   enableShortRefs: true,
   screenshotQuality: 80,
-};
-
-const providerPresets: Record<string, { baseUrl: string }> = {
-  openai: { baseUrl: "https://api.openai.com/v1" },
-  anthropic: { baseUrl: "https://api.anthropic.com/v1" },
+  enableCodeExecution: true,
+  codeExecutionTimeoutMs: 1000,
+  codeExecutionMaxOutputChars: 6000,
 };
 
 export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onThemeChange: (m: ThemeMode) => void }) {
@@ -92,11 +93,7 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
   }, []);
 
   const handleProviderChange = useCallback((provider: string) => {
-    const preset = providerPresets[provider];
-    updateSettings({
-      provider,
-      baseUrl: preset?.baseUrl || "",
-    });
+    updateSettings({ provider });
     setModelOptions([]);
   }, [updateSettings]);
 
@@ -201,7 +198,7 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
               value={settings.baseUrl}
               onChange={(e) => updateSettings({ baseUrl: e.target.value })}
               fullWidth
-              helperText="OpenAI 兼容的 API 地址"
+              helperText="末尾请带上 /v1"
             />
 
             <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
@@ -283,6 +280,65 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
             />
             <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
               read_page_interactive / find_element 返回的元素会附带 <code>ref: "#1"</code> 形式的短引用，模型可以直接用 <code>#1</code> 替代复杂 CSS 选择器；执行时由扩展自动还原。该编号在一次对话内自增。
+            </Typography>
+
+            <Divider />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.enableCodeExecution}
+                  onChange={(e) => updateSettings({ enableCodeExecution: e.target.checked })}
+                />
+              }
+              label="启用 execute_js 沙箱代码执行"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+              允许模型在独立 QuickJS 沙箱中执行纯 JavaScript 计算代码。该工具没有 DOM、网络或扩展 API；在 Ask 模式下仍需审批。
+            </Typography>
+
+            <Divider />
+
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              execute_js 超时：{settings.codeExecutionTimeoutMs} ms
+            </Typography>
+            <Slider
+              value={settings.codeExecutionTimeoutMs}
+              onChange={(_e, v) => updateSettings({ codeExecutionTimeoutMs: v as number })}
+              min={100}
+              max={5000}
+              step={100}
+              marks={[
+                { value: 100, label: "100" },
+                { value: 1000, label: "1000" },
+                { value: 5000, label: "5000" },
+              ]}
+              valueLabelDisplay="auto"
+              sx={{ mt: -0.5 }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+              用于限制 execute_js 的最长运行时间，避免死循环或长时间占用后台 Service Worker。
+            </Typography>
+
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              execute_js 最大输出字符：{settings.codeExecutionMaxOutputChars}
+            </Typography>
+            <Slider
+              value={settings.codeExecutionMaxOutputChars}
+              onChange={(_e, v) => updateSettings({ codeExecutionMaxOutputChars: v as number })}
+              min={1000}
+              max={20000}
+              step={500}
+              marks={[
+                { value: 1000, label: "1k" },
+                { value: 6000, label: "6k" },
+                { value: 20000, label: "20k" },
+              ]}
+              valueLabelDisplay="auto"
+              sx={{ mt: -0.5 }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+              限制 execute_js 返回结果和 console 输出的总字符数；超出后会被截断并标记 truncated。
             </Typography>
 
             <Divider />

@@ -4,6 +4,22 @@ import type { ToolDefinition } from "./types";
 
 export const toolDefinitions: ToolDefinition[] = [
   {
+    name: "execute_js",
+    description:
+      "在独立沙箱中执行一段纯 JavaScript 计算代码。必须同时提供 description 和 code。code 以函数体形式提供，可直接通过 return 返回结果。该工具没有 DOM、网络或 Chrome 扩展 API。",
+    parameters: {
+      description: {
+        type: "string",
+        description: "本段代码的用途说明，要求清楚描述要做什么、输入假设和期望输出",
+      },
+      code: {
+        type: "string",
+        description: "要执行的 JavaScript 函数体代码；通过 return 返回结果。不要使用 window、document、fetch、chrome 等宿主能力",
+      },
+    },
+    required: ["description", "code"],
+  },
+  {
     name: "screenshot",
     description:
       "截取当前页面的屏幕截图，返回 base64 编码的图片。",

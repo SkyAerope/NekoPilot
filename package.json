@@ -1,6 +1,6 @@
 {
   "name": "nekopilot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,9 +11,13 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
+    "@jitl/quickjs-ffi-types": "^0.32.0",
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
     "@mui/icons-material": "^7.0.0",
     "@mui/material": "^7.0.0",
     "katex": "^0.16.45",
+    "quickjs-emscripten": "^0.32.0",
+    "quickjs-emscripten-core": "^0.32.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",

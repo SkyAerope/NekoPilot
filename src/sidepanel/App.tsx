@@ -132,6 +132,7 @@ function getToolIcon(name?: string) {
 
 function getToolLabel(name?: string): string {
   const labels: Record<string, string> = {
+    execute_js: "Run JS",
     screenshot: "Take screenshot",
     read_page_text: "Extract page text",
     read_page: "Read page structure",
@@ -156,6 +157,8 @@ function getToolSubtitle(name?: string, argsStr?: string): string {
   try { args = JSON.parse(argsStr); } catch { return ""; }
   const trim = (s: string, n = 60) => (s.length > n ? s.slice(0, n) + "…" : s);
   switch (name) {
+    case "execute_js":
+      return typeof args.description === "string" ? trim(args.description, 60) : "";
     case "navigate":
       return typeof args.url === "string" ? args.url : "";
     case "set_input": {
@@ -175,6 +178,41 @@ function getToolSubtitle(name?: string, argsStr?: string): string {
     default:
       return "";
   }
+}
+
+function formatToolArgsMarkdown(name?: string, argsStr?: string): string {
+  if (!argsStr) return "";
+
+  let args: Record<string, unknown>;
+  try {
+    args = JSON.parse(argsStr);
+  } catch {
+    return `\`\`\`text\n${escapeMarkdownCodeFence(argsStr)}\n\`\`\``;
+  }
+
+  if (name === "execute_js") {
+    const parts: string[] = [];
+    if (typeof args.description === "string" && args.description.trim()) {
+      parts.push(`**Description**\n\n${args.description.trim()}`);
+    }
+    if (typeof args.code === "string" && args.code.trim()) {
+      parts.push(`**Code**\n\n\`\`\`js\n${escapeMarkdownCodeFence(args.code)}\n\`\`\``);
+    }
+    return parts.join("\n\n");
+  }
+
+  return `\`\`\`json\n${escapeMarkdownCodeFence(JSON.stringify(args, null, 2))}\n\`\`\``;
+}
+
+function formatToolResultMarkdown(name?: string, result?: string): string {
+  if (!result) return "";
+  if (name === "execute_js") {
+    return `\`\`\`json\n${escapeMarkdownCodeFence(result)}\n\`\`\``;
+  }
+  if (/^(\{|\[)/.test(result.trim())) {
+    return `\`\`\`json\n${escapeMarkdownCodeFence(result)}\n\`\`\``;
+  }
+  return result;
 }
 
 // ── 日志分段 ──
@@ -266,6 +304,14 @@ const markdownSx = {
 const markdownRemarkPlugins = [remarkGfm, remarkMath];
 const markdownRehypePlugins = [rehypeKatex];
 
+function escapeMarkdownCodeFence(content: string): string {
+  return content.replace(/```/g, "``\\`");
+}
+
+function escapeMathDelimiters(raw: string): string {
+  return raw.replace(/\$/g, "\\$");
+}
+
 function appendSyntheticMathCloser(content: string, closer: "$" | "$$"): string {
   if (closer === "$$") {
     return content + (content.endsWith("\n") ? "" : "\n") + "$$";
@@ -340,6 +386,74 @@ function getStreamingMarkdownPreview(content: string, streaming: boolean): strin
   if (insideBlockMath) return appendSyntheticMathCloser(content, "$$");
   if (insideInlineMath) return appendSyntheticMathCloser(content, "$");
   return content;
+}
+
+function normalizeDisplayMathBlocks(content: string): string {
+  const segments = collectMathSegments(content);
+  if (segments.length === 0) return content;
+
+  let next = "";
+  let cursor = 0;
+
+  for (const segment of segments) {
+    next += content.slice(cursor, segment.start);
+    if (!segment.displayMode) {
+      next += segment.raw;
+      cursor = segment.end;
+      continue;
+    }
+
+    const needsLeadingBreak = segment.start > 0 && content[segment.start - 1] !== "\n";
+    const needsTrailingBreak = segment.end < content.length && content[segment.end] !== "\n";
+    next += `${needsLeadingBreak ? "\n" : ""}$$\n${segment.expression.trim()}\n$$${needsTrailingBreak ? "\n" : ""}`;
+    cursor = segment.end;
+  }
+
+  next += content.slice(cursor);
+  return next;
+}
+
+function normalizeBracketMath(content: string): string {
+  const lines = content.split("\n");
+  let insideFence = false;
+
+  return lines.map((line) => {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("```")) {
+      insideFence = !insideFence;
+      return line;
+    }
+    if (insideFence || !line.includes("[")) return line;
+
+    return line.replace(/(^|[^!])\[([^\]\n]+)\](?!\()/g, (match, prefix: string, expression: string) => {
+      const math = expression.trim();
+      if (!isLikelyBracketMath(math)) return match;
+      return `${prefix}$${math}$`;
+    });
+  }).join("\n");
+}
+
+function isLikelyBracketMath(expression: string): boolean {
+  if (!expression || expression.length > 300) return false;
+  if (/^https?:\/\//i.test(expression)) return false;
+  return /\\[A-Za-z]+|[_^=]|\b(?:det|sin|cos|tan|log|ln)\s*\(/.test(expression);
+}
+
+function escapeInvalidMathBlocks(content: string): string {
+  const segments = collectMathSegments(content);
+  if (segments.length === 0) return content;
+
+  let next = "";
+  let cursor = 0;
+
+  for (const segment of segments) {
+    next += content.slice(cursor, segment.start);
+    next += canRenderMathSegment(segment) ? segment.raw : escapeMathDelimiters(segment.raw);
+    cursor = segment.end;
+  }
+
+  next += content.slice(cursor);
+  return next;
 }
 
 function collectMathSegments(content: string): Array<{
@@ -525,7 +639,10 @@ function MarkdownMessage({
   const lastGoodSegmentsRef = useRef<Array<{ raw: string; displayMode: boolean }>>([]);
   const renderContent = useMemo(() => {
     const previewContent = getStreamingMarkdownPreview(content, streaming);
-    const stablePreview = getStableMathPreview(previewContent, lastGoodSegmentsRef.current);
+    const bracketNormalizedContent = normalizeBracketMath(previewContent);
+    const normalizedContent = normalizeDisplayMathBlocks(bracketNormalizedContent);
+    const sanitizedContent = escapeInvalidMathBlocks(normalizedContent);
+    const stablePreview = getStableMathPreview(sanitizedContent, lastGoodSegmentsRef.current);
     lastGoodSegmentsRef.current = stablePreview.nextSegments;
     return stablePreview.renderContent;
   }, [content, streaming]);
@@ -904,6 +1021,9 @@ export default function App() {
       provider?: string;
       enableShortRefs?: boolean;
       screenshotQuality?: number;
+      enableCodeExecution?: boolean;
+      codeExecutionTimeoutMs?: number;
+      codeExecutionMaxOutputChars?: number;
     }>("settings:get");
 
     if (!settings?.apiKey) {
@@ -925,6 +1045,11 @@ export default function App() {
           permissionMode: autoMode ? "auto" : "ask",
           showClickMarker: settings.showClickMarker !== false,
           provider: settings.provider === "anthropic" ? "anthropic" : "openai",
+          enableShortRefs: settings.enableShortRefs !== false,
+          screenshotQuality: typeof settings.screenshotQuality === "number" ? settings.screenshotQuality : 80,
+          enableCodeExecution: settings.enableCodeExecution !== false,
+          codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
+          codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
         },
       });
     } catch (err) {
@@ -1061,7 +1186,7 @@ export default function App() {
       ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
       .join("\n") ?? "";
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotQuality?: number }>("settings:get");
+    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotQuality?: number; enableCodeExecution?: boolean; codeExecutionTimeoutMs?: number; codeExecutionMaxOutputChars?: number }>("settings:get");
     if (!settings?.apiKey) {
       setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
       return;
@@ -1082,6 +1207,9 @@ export default function App() {
           provider: settings.provider === "anthropic" ? "anthropic" : "openai",
           enableShortRefs: settings.enableShortRefs !== false,
           screenshotQuality: typeof settings.screenshotQuality === "number" ? settings.screenshotQuality : 80,
+          enableCodeExecution: settings.enableCodeExecution !== false,
+          codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
+          codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
         },
       });
     } catch (err) {
@@ -1813,17 +1941,20 @@ function ToolCallStep({
   const isScreenshot = entry.toolName === "screenshot";
   const isPending = !hasResult && entry.needsPermission && !entry.permissionResolved;
   const isExecuting = !hasResult && (!entry.needsPermission || entry.permissionResolved);
+  const argsMarkdown = formatToolArgsMarkdown(entry.toolName, entry.content);
+  const resultMarkdown = formatToolResultMarkdown(entry.toolName, entry.toolResult);
+  const hasDetails = Boolean(argsMarkdown || resultMarkdown || (isScreenshot && entry.screenshotData));
 
   return (
     <Box>
       {/* 操作标签 */}
       <Box
-        onClick={hasResult ? onToggle : undefined}
+        onClick={hasDetails ? onToggle : undefined}
         sx={{
           display: "flex", alignItems: "center", gap: 0.75,
           flexWrap: "nowrap", minWidth: 0,
-          cursor: hasResult ? "pointer" : "default",
-          "&:hover": hasResult ? { opacity: 0.8 } : {},
+          cursor: hasDetails ? "pointer" : "default",
+          "&:hover": hasDetails ? { opacity: 0.8 } : {},
         }}
       >
         <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px", whiteSpace: "nowrap", flexShrink: 0 }}>
@@ -1853,7 +1984,7 @@ function ToolCallStep({
           <ErrorOutlineIcon sx={{ fontSize: 14, color: "error.main", flexShrink: 0 }} />
         )}
 
-        {hasResult && (
+        {hasDetails && (
           <ExpandMoreIcon
             sx={{
               fontSize: 16,
@@ -1869,6 +2000,11 @@ function ToolCallStep({
       {/* 截图缩略图 — 可折叠 */}
       {isScreenshot && entry.screenshotData && (
         <Collapse in={expanded}>
+          {argsMarkdown && (
+            <Box sx={{ mt: 0.75, ...markdownSx, fontSize: "0.8rem", "& p": { my: 0.5 } }}>
+              <MarkdownMessage content={argsMarkdown} streaming={false} />
+            </Box>
+          )}
           <Box
             component="img"
             src={`data:${entry.screenshotMime || "image/png"};base64,${entry.screenshotData}`}
@@ -1893,19 +2029,38 @@ function ToolCallStep({
       )}
 
       {/* 可折叠结果 */}
-      {hasResult && !isScreenshot && (
+      {!isScreenshot && (argsMarkdown || resultMarkdown) && (
         <Collapse in={expanded}>
-          <Typography
-            component="pre"
-            variant="caption"
-            sx={{
-              fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all",
-              opacity: 0.6, mt: 0.5, maxHeight: 200, overflow: "auto",
-              fontSize: "0.72rem", lineHeight: 1.4,
-            }}
-          >
-            {entry.toolResult}
-          </Typography>
+          {argsMarkdown && (
+            <Box
+              sx={{
+                mt: 0.5,
+                maxHeight: 220,
+                overflow: "auto",
+                opacity: 0.8,
+                ...markdownSx,
+                fontSize: "0.8rem",
+                "& p": { my: 0.5 },
+              }}
+            >
+              <MarkdownMessage content={argsMarkdown} streaming={false} />
+            </Box>
+          )}
+          {resultMarkdown && (
+            <Box
+              sx={{
+                mt: argsMarkdown ? 0.75 : 0.5,
+                maxHeight: 220,
+                overflow: "auto",
+                opacity: 0.72,
+                ...markdownSx,
+                fontSize: "0.78rem",
+                "& p": { my: 0.5 },
+              }}
+            >
+              <MarkdownMessage content={resultMarkdown} streaming={false} />
+            </Box>
+          )}
         </Collapse>
       )}
     </Box>
