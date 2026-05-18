@@ -468,7 +468,9 @@ export class AgentLoop {
     const tools = this.getAvailableToolDefinitions().map(toAnthropicTool);
     const { system, messages } = this.convertMessagesForAnthropic();
 
-    const body = {
+    const enableCaching = this.config.enablePromptCaching;
+
+    const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: 4096,
       system,
@@ -477,13 +479,23 @@ export class AgentLoop {
       stream: true,
     };
 
+    if (enableCaching) {
+      body.cache_control = { type: "ephemeral", ttl: "5m" };
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-api-key": this.config.apiKey,
+      "anthropic-version": "2023-06-01",
+    };
+
+    if (enableCaching) {
+      headers["anthropic-beta"] = "prompt-caching-2024-07-31";
+    }
+
     const resp = await fetch(`${this.config.baseUrl}/messages`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.config.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
+      headers,
       body: JSON.stringify(body),
       signal: (this.httpAbortController = new AbortController()).signal,
     });
@@ -507,6 +519,8 @@ export class AgentLoop {
     // Anthropic usage：message_start 给 input_tokens，message_delta 累计 output_tokens
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheCreationInputTokens = 0;
+    let cacheReadInputTokens = 0;
     let toolCallStreamingStarted = false;
 
     const reader = resp.body!.getReader();
@@ -535,6 +549,8 @@ export class AgentLoop {
           if (u) {
             inputTokens = u.input_tokens ?? 0;
             outputTokens = u.output_tokens ?? 0;
+            cacheCreationInputTokens = u.cache_creation_input_tokens ?? 0;
+            cacheReadInputTokens = u.cache_read_input_tokens ?? 0;
           }
           continue;
         }
@@ -602,6 +618,8 @@ export class AgentLoop {
           promptTokens: inputTokens,
           completionTokens: outputTokens,
           totalTokens: inputTokens + outputTokens,
+          cacheCreationInputTokens: cacheCreationInputTokens || undefined,
+          cacheReadInputTokens: cacheReadInputTokens || undefined,
         },
       });
     }

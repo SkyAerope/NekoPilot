@@ -687,6 +687,7 @@ export default function App() {
   /** 最近一次 LLM 响应的 prompt token 数——代表"当前上下文占用"。
    *  每轮请求都会刷新，UI 把它显示在工具栏让用户知道还剩多少预算。 */
   const [promptTokens, setPromptTokens] = useState<number | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<{ creation: number; read: number } | null>(null);
   const logsBoxRef = useRef<HTMLDivElement>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -958,13 +959,19 @@ export default function App() {
       }
 
       if (event.type === "usage") {
-        const u = event.data as { promptTokens?: number; totalTokens?: number } | undefined;
+        const u = event.data as { promptTokens?: number; totalTokens?: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number } | undefined;
         // prompt_tokens 反映上一轮请求的上下文大小，最能代表"当前占了多少上下文"。
         // 没有时兜底用 totalTokens。
         const n = typeof u?.promptTokens === "number" && u.promptTokens > 0
           ? u.promptTokens
           : typeof u?.totalTokens === "number" ? u.totalTokens : null;
         if (n !== null) setPromptTokens(n);
+        // 缓存命中信息
+        if (u?.cacheCreationInputTokens || u?.cacheReadInputTokens) {
+          setCacheInfo({ creation: u.cacheCreationInputTokens ?? 0, read: u.cacheReadInputTokens ?? 0 });
+        } else {
+          setCacheInfo(null);
+        }
         return;
       }
 
@@ -1057,6 +1064,7 @@ export default function App() {
       enableCodeExecution?: boolean;
       codeExecutionTimeoutMs?: number;
       codeExecutionMaxOutputChars?: number;
+      enablePromptCaching?: boolean;
     }>("settings:get");
 
     if (!settings?.apiKey) {
@@ -1083,6 +1091,7 @@ export default function App() {
           enableCodeExecution: settings.enableCodeExecution !== false,
           codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
           codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
+          enablePromptCaching: settings.enablePromptCaching === true,
         },
       });
     } catch (err) {
@@ -1112,6 +1121,7 @@ export default function App() {
   const handleClearChat = useCallback(() => {
     setLogs([]);
     setPromptTokens(null);
+    setCacheInfo(null);
     sendMessage("agent:reset").catch(() => {});
   }, []);
 
@@ -1219,7 +1229,7 @@ export default function App() {
       ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
       .join("\n") ?? "";
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotQuality?: number; enableCodeExecution?: boolean; codeExecutionTimeoutMs?: number; codeExecutionMaxOutputChars?: number }>("settings:get");
+    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotQuality?: number; enableCodeExecution?: boolean; codeExecutionTimeoutMs?: number; codeExecutionMaxOutputChars?: number; enablePromptCaching?: boolean }>("settings:get");
     if (!settings?.apiKey) {
       setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
       return;
@@ -1243,6 +1253,7 @@ export default function App() {
           enableCodeExecution: settings.enableCodeExecution !== false,
           codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
           codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
+          enablePromptCaching: settings.enablePromptCaching === true,
         },
       });
     } catch (err) {
@@ -1561,7 +1572,21 @@ export default function App() {
             <Box sx={{ flexGrow: 1 }} />
 
             {promptTokens !== null && (
-              <Tooltip title={`上下文 ${promptTokens.toLocaleString()} tokens（上一轮请求）`}>
+              <Tooltip
+                title={
+                  <Box sx={{ whiteSpace: "pre-line" }}>
+                    {cacheInfo ? (
+                      <>
+                        <div>上下文: {promptTokens.toLocaleString()}</div>
+                        <div>缓存写入: {cacheInfo.creation.toLocaleString()}</div>
+                        <div>缓存命中: {cacheInfo.read.toLocaleString()}</div>
+                      </>
+                    ) : (
+                      <div>上下文: {promptTokens.toLocaleString()}</div>
+                    )}
+                  </Box>
+                }
+              >
                 <Typography
                   variant="caption"
                   sx={{
@@ -1572,7 +1597,7 @@ export default function App() {
                     userSelect: "none",
                   }}
                 >
-                  {formatTokens(promptTokens)}
+                  {formatTokens(promptTokens + (cacheInfo ? cacheInfo.creation + cacheInfo.read : 0))}
                 </Typography>
               </Tooltip>
             )}

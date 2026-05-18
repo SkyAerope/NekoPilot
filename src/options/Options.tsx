@@ -41,6 +41,7 @@ interface Settings {
   enableCodeExecution: boolean;
   codeExecutionTimeoutMs: number;
   codeExecutionMaxOutputChars: number;
+  enablePromptCaching: boolean;
 }
 
 const defaultSettings: Settings = {
@@ -55,6 +56,7 @@ const defaultSettings: Settings = {
   enableCodeExecution: true,
   codeExecutionTimeoutMs: 1000,
   codeExecutionMaxOutputChars: 6000,
+  enablePromptCaching: false,
 };
 
 export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onThemeChange: (m: ThemeMode) => void }) {
@@ -227,6 +229,22 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
                 </IconButton>
               </Tooltip>
             </Box>
+
+          {settings.provider === "anthropic" && (
+            <>
+              <Divider />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={settings.enablePromptCaching}
+                    onChange={(e) => updateSettings({ enablePromptCaching: e.target.checked })}
+                  />
+                }
+                label="启用提示缓存 (Prompt Caching)"
+              />
+
+            </>
+          )}
           </Stack>
         </Paper>
 

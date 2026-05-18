@@ -12,6 +12,7 @@ export interface AgentConfig {
   enableCodeExecution: boolean;
   codeExecutionTimeoutMs: number;
   codeExecutionMaxOutputChars: number;
+  enablePromptCaching: boolean;
 }
 
 export type AgentEventType =
