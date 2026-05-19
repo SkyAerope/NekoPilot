@@ -121,9 +121,11 @@ function getToolIcon(name?: string) {
     case "get_element_rect":
       return <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />;
     case "click":
-    case "set_input":
+    case "keyboard_type":
     case "drag":
     case "scroll":
+    case "hover":
+    case "press_key":
       return <TouchAppOutlinedIcon sx={{ fontSize: 16 }} />;
     default:
       return <BuildOutlinedIcon sx={{ fontSize: 16 }} />;
@@ -138,8 +140,10 @@ function getToolLabel(name?: string): string {
     read_page: "Read page structure",
     read_page_interactive: "Find interactive elements",
     click: "Click",
-    set_input: "Type text",
+    keyboard_type: "Keyboard input",
     scroll: "Scroll page",
+    hover: "Hover",
+    handle_dialog: "Handle dialog",
     navigate: "Navigate",
     wait: "Wait",
     find_element: "Find element",
@@ -161,9 +165,12 @@ function getToolSubtitle(name?: string, argsStr?: string): string {
       return typeof args.description === "string" ? trim(args.description, 60) : "";
     case "navigate":
       return typeof args.url === "string" ? args.url : "";
-    case "set_input": {
-      const v = typeof args.value === "string" ? args.value : "";
-      return v ? `"${trim(v, 40)}"` : "";
+    case "keyboard_type": {
+      const text = typeof args.text === "string" ? args.text : "";
+      const key = typeof args.key === "string" ? args.key : "";
+      if (text) return `"${trim(text, 40)}"`;
+      if (key) return key;
+      return "";
     }
     case "click":
       if (typeof args.selector === "string") return trim(args.selector, 50);

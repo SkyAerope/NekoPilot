@@ -16,7 +16,7 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 工作流程：
 1. 先用 screenshot 或 read_page 观察当前页面状态
 2. 分析页面内容，查找目标元素的坐标/选择器
-3. 执行操作（click、set_input 等）
+3. 执行操作（click、keyboard_type 等）
 4. 再次观察确认操作结果
 5. 重复直到任务完成
 
@@ -27,7 +27,10 @@ const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 - 如果使用CDP失败，尝试使用 jsClick 或 jsSet。
 - 每次操作后用 screenshot 确认结果。
 - 点击时禁止猜测坐标。优先使用工具返回的选择器，其次是坐标。
-- 点击与输入操作会在操作前**自动**将目标滚动至视口内，**无需手动滚动**。请在自动滚动未生效时，再使用手动滚动。`;
+- 点击与输入操作会在操作前**自动**将目标滚动至视口内，**无需手动滚动**。请在自动滚动未生效时，再使用手动滚动。
+- 使用 hover 触发下拉菜单、tooltip 等悬停效果。
+- 使用 keyboard_type 输入文本或发送键盘按键。text 参数用于输入文本，key 参数用于按键（Enter 提交、Escape 关闭、Tab 切换焦点等）。输入文本时可通过 pressEnter 参数自动回车，通过 method 参数切换输入方式。
+- 遇到浏览器原生弹窗（alert/confirm/prompt）时使用 handle_dialog 响应。`;
 
 const CODE_EXECUTION_HINT = `
 
@@ -39,7 +42,7 @@ const SHORT_REFS_HINT = `
 
 元素短引用（#n）：
 - read_page_interactive / find_element 返回项的 selector 字段会被替换为形如 "#1"、"#2" 的短引用（真实选择器由扩展内部映射）。
-- 在后续 click / set_input / get_element_text / get_element_rect 等工具调用中，你既可以直接传入这些 #n 短引用，也可以照常传入任意真实 CSS 选择器（如 "#login-btn"、".item:nth-child(3)"）。扩展只在参数形如 "#1"、"#2" 这种"井号 + 纯数字"时才当作短引用还原；其他写法会原样透传给页面。
+- 在后续 click / keyboard_type / hover / get_element_text / get_element_rect 等工具调用中，你既可以直接传入这些 #n 短引用，也可以照常传入任意真实 CSS 选择器（如 "#login-btn"、".item:nth-child(3)"）。扩展只在参数形如 "#1"、"#2" 这种"井号 + 纯数字"时才当作短引用还原；其他写法会原样透传给页面。
 - 优先使用 #n：显著节省 token，也避免长选择器的转义问题。`;
 export class AgentLoop {
   private messages: ChatMessage[] = [];
@@ -642,7 +645,7 @@ export class AgentLoop {
 
   private static readonly READONLY_TOOLS = new Set([
     "screenshot", "read_page_text", "read_page", "read_page_interactive",
-    "find_element", "get_element_text", "get_element_rect", "wait",
+    "find_element", "get_element_text", "get_element_rect", "wait", "hover",
   ]);
 
   private async executeToolCall(toolCall: ToolCall, deferredMessages: ChatMessage[]): Promise<void> {
@@ -708,7 +711,7 @@ export class AgentLoop {
               await this.tools.showScrollMarker(x, y, dx, dy);
               showedMarker = true;
             }
-          } else if (name === "set_input") {
+          } else if (name === "keyboard_type") {
             const sel = args.selector as string | undefined;
             if (sel) {
               await this.tools.showInputMarker(sel).catch(() => {});

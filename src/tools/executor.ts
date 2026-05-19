@@ -60,7 +60,7 @@ export class ToolExecutor {
   /**
    * 对 readPageInteractive / findElement 返回的 YAML 文本做后处理：
    * 将每条列表项的 selector 值替换为分配到的 #n 短引用（真实 selector 保存在 shortRefMap，
-   * 后续 click/set_input 等调用时由 resolveShortRef 还原）。
+   * 后续 click/keyboard_type 等调用时由 resolveShortRef 还原）。
    * 禁用短引用时直接返回原文。
    */
   private annotateShortRefs(text: string): string {
@@ -145,11 +145,14 @@ export class ToolExecutor {
           (params.jsClick as boolean | undefined) ?? false,
         );
         return "done";
-      case "set_input":
-        await this.setInput(
-          params.selector as string,
-          params.value as string,
-          (params.jsSet as boolean | undefined) ?? false,
+      case "keyboard_type":
+        await this.keyboardType(
+          params.text as string | undefined,
+          params.key as string | undefined,
+          params.selector as string | undefined,
+          params.method as "js" | "key" | undefined,
+          (params.pressEnter as boolean | undefined) ?? false,
+          (params.clear as boolean | undefined) ?? true,
         );
         return "done";
       case "scroll":
@@ -187,6 +190,19 @@ export class ToolExecutor {
           (params.limit as number) ?? 2048,
           (params.offset as number) ?? 0
         );
+      case "hover":
+        await this.hover(
+          params.x as number | undefined,
+          params.y as number | undefined,
+          params.selector as string | undefined,
+        );
+        return "done";
+      case "handle_dialog":
+        await this.handleDialog(
+          (params.accept as boolean | undefined) ?? true,
+          params.promptText as string | undefined,
+        );
+        return "done";
       case "get_element_rect":
         return this.getElementRect(params.selector as string);
       default:
@@ -588,26 +604,45 @@ export class ToolExecutor {
     await this.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...common });
   }
 
-  private async setInput(selector: string, value: string, jsSet = false): Promise<void> {
-    selector = this.resolveShortRef(selector);
-    const selJson = JSON.stringify(selector);
-    // 先 scrollIntoViewIfNeeded + focus
-    const prepExpr = `(function() {
-      const el = document.querySelector(${selJson});
-      if (!el) return false;
-      if (typeof el.scrollIntoViewIfNeeded === 'function') {
-        el.scrollIntoViewIfNeeded();
-      } else {
-        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      }
-      el.focus();
-      return true;
-    })()`;
-    const ok = await this.evaluate<boolean>(prepExpr);
-    if (!ok) throw new Error(`Element not found: ${selector}`);
+  private async keyboardType(
+    text?: string,
+    key?: string,
+    selector?: string,
+    method?: "js" | "key",
+    pressEnter = false,
+    clear = true,
+  ): Promise<void> {
+    if (!text && !key) throw new Error("keyboard_type requires either text or key");
 
-    if (jsSet) {
-      // 纯 JS 赋值 + 派发事件（适合受控框架或非标准组件）
+    // ── 可选：先聚焦目标元素 ──
+    if (selector) {
+      selector = this.resolveShortRef(selector);
+      const selJson = JSON.stringify(selector);
+      const ok = await this.evaluate<boolean>(`(function() {
+        const el = document.querySelector(${selJson});
+        if (!el) return false;
+        if (typeof el.scrollIntoViewIfNeeded === 'function') el.scrollIntoViewIfNeeded();
+        else el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        el.focus();
+        return true;
+      })()`);
+      if (!ok) throw new Error(`Element not found: ${selector}`);
+    }
+
+    // ── key 模式：发送按键 ──
+    if (key) {
+      await this.pressKeyCombo(key);
+      return;
+    }
+
+    // ── text 模式：输入文本 ──
+    const value = text!;
+    const resolvedSelector = selector ? this.resolveShortRef(selector) : null;
+    const selJson = resolvedSelector ? JSON.stringify(resolvedSelector) : null;
+
+    if (method === "js") {
+      // JS 赋值 + 派发事件
+      if (!selJson) throw new Error("method 'js' requires selector");
       const setExpr = `(function() {
         const el = document.querySelector(${selJson});
         if (!el) return false;
@@ -617,17 +652,34 @@ export class ToolExecutor {
         return true;
       })()`;
       await this.evaluate<boolean>(setExpr);
-      return;
+    } else if (method === "key") {
+      // 逐字符 dispatchKeyEvent
+      if (clear && selJson) {
+        await this.cdp.send("Runtime.evaluate", {
+          expression: `document.querySelector(${selJson}).value = ''`,
+        });
+      }
+      for (const char of value) {
+        await this.dispatchChar(char);
+      }
+    } else {
+      // 默认：CDP Input.insertText
+      if (clear && selJson) {
+        await this.cdp.send("Runtime.evaluate", {
+          expression: `document.querySelector(${selJson}).value = ''`,
+        });
+      }
+      await this.cdp.send("Input.insertText", { text: value });
+      if (selJson) {
+        await this.cdp.send("Runtime.evaluate", {
+          expression: `document.querySelector(${selJson}).dispatchEvent(new Event('input', { bubbles: true }))`,
+        });
+      }
     }
 
-    // CDP 路径：清空 → insertText → 派发 input
-    await this.cdp.send("Runtime.evaluate", {
-      expression: `document.querySelector(${selJson}).value = ''`,
-    });
-    await this.cdp.send("Input.insertText", { text: value });
-    await this.cdp.send("Runtime.evaluate", {
-      expression: `document.querySelector(${selJson}).dispatchEvent(new Event('input', { bubbles: true }))`,
-    });
+    if (pressEnter) {
+      await this.dispatchKey("Enter", "Enter", 13, "\r");
+    }
   }
 
   private async scroll(
@@ -796,5 +848,219 @@ export class ToolExecutor {
       })()
     `;
     return this.evaluate(expression);
+  }
+
+  // ── Hover ──
+
+  private async hover(x?: number, y?: number, selector?: string): Promise<void> {
+    if (selector) {
+      selector = this.resolveShortRef(selector);
+      const selJson = JSON.stringify(selector);
+      const prepExpr = `(function() {
+        const el = document.querySelector(${selJson});
+        if (!el) return null;
+        if (typeof el.scrollIntoViewIfNeeded === 'function') {
+          el.scrollIntoViewIfNeeded();
+        } else {
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      })()`;
+      const pos = await this.evaluate<{ x: number; y: number } | null>(prepExpr);
+      if (!pos) throw new Error(`Element not found: ${selector}`);
+      await this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pos.x, y: pos.y });
+      return;
+    }
+    if (x !== undefined && y !== undefined) {
+      await this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      return;
+    }
+    throw new Error("hover requires either (x, y) or selector");
+  }
+
+  // ── Press Key ──
+
+  /** 键名映射表：key → { code, keyCode, text? }（用于 press_key 风格的命名键） */
+  private static readonly KEY_MAP: Record<string, { code: string; keyCode: number; text?: string }> = {
+    Enter:      { code: "Enter",       keyCode: 13, text: "\r" },
+    Tab:        { code: "Tab",         keyCode: 9 },
+    Escape:     { code: "Escape",      keyCode: 27 },
+    Backspace:  { code: "Backspace",   keyCode: 8 },
+    Delete:     { code: "Delete",      keyCode: 46 },
+    ArrowUp:    { code: "ArrowUp",     keyCode: 38 },
+    ArrowDown:  { code: "ArrowDown",   keyCode: 40 },
+    ArrowLeft:  { code: "ArrowLeft",   keyCode: 37 },
+    ArrowRight: { code: "ArrowRight",  keyCode: 39 },
+    Home:       { code: "Home",        keyCode: 36 },
+    End:        { code: "End",         keyCode: 35 },
+    PageUp:     { code: "PageUp",      keyCode: 33 },
+    PageDown:   { code: "PageDown",    keyCode: 34 },
+    " ":        { code: "Space",       keyCode: 32, text: " " },
+    Space:      { code: "Space",       keyCode: 32, text: " " },
+  };
+
+  /**
+   * 字符→物理键映射（US QWERTY 布局）。
+   * shift 为 true 表示该字符需要 Shift 修饰。
+   * 未列出的小写字母 a-z 和数字 0-9 在 dispatchChar 中动态处理。
+   */
+  private static readonly CHAR_MAP: Record<string, { code: string; keyCode: number; shift?: boolean }> = {
+    // 数字行上档符号
+    "!": { code: "Digit1",      keyCode: 49, shift: true },
+    "@": { code: "Digit2",      keyCode: 50, shift: true },
+    "#": { code: "Digit3",      keyCode: 51, shift: true },
+    "$": { code: "Digit4",      keyCode: 52, shift: true },
+    "%": { code: "Digit5",      keyCode: 53, shift: true },
+    "^": { code: "Digit6",      keyCode: 54, shift: true },
+    "&": { code: "Digit7",      keyCode: 55, shift: true },
+    "*": { code: "Digit8",      keyCode: 56, shift: true },
+    "(": { code: "Digit9",      keyCode: 57, shift: true },
+    ")": { code: "Digit0",      keyCode: 48, shift: true },
+    // 符号键（无 Shift）
+    "-": { code: "Minus",        keyCode: 189 },
+    "=": { code: "Equal",        keyCode: 187 },
+    "[": { code: "BracketLeft",  keyCode: 219 },
+    "]": { code: "BracketRight", keyCode: 221 },
+    "\\": { code: "Backslash",   keyCode: 220 },
+    ";": { code: "Semicolon",    keyCode: 186 },
+    "'": { code: "Quote",        keyCode: 222 },
+    ",": { code: "Comma",        keyCode: 188 },
+    ".": { code: "Period",       keyCode: 190 },
+    "/": { code: "Slash",        keyCode: 191 },
+    "`": { code: "Backquote",    keyCode: 192 },
+    // 符号键（Shift）
+    "_": { code: "Minus",        keyCode: 189, shift: true },
+    "+": { code: "Equal",        keyCode: 187, shift: true },
+    "{": { code: "BracketLeft",  keyCode: 219, shift: true },
+    "}": { code: "BracketRight", keyCode: 221, shift: true },
+    "|": { code: "Backslash",    keyCode: 220, shift: true },
+    ":": { code: "Semicolon",    keyCode: 186, shift: true },
+    '"': { code: "Quote",        keyCode: 222, shift: true },
+    "<": { code: "Comma",        keyCode: 188, shift: true },
+    ">": { code: "Period",       keyCode: 190, shift: true },
+    "?": { code: "Slash",        keyCode: 191, shift: true },
+    "~": { code: "Backquote",    keyCode: 192, shift: true },
+    " ": { code: "Space",        keyCode: 32 },
+  };
+
+  /**
+   * 解析 key 描述（支持 "Control+a"、"Shift+Enter" 等组合键）并通过 CDP 派发。
+   */
+  private async pressKeyCombo(key: string): Promise<void> {
+    // 解析修饰键
+    const parts = key.split("+");
+    const mainKey = parts.pop()!;
+    const modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean } = {
+      ctrl: false, alt: false, shift: false, meta: false,
+    };
+    for (const mod of parts) {
+      const m = mod.toLowerCase();
+      if (m === "control" || m === "ctrl") modifiers.ctrl = true;
+      else if (m === "alt") modifiers.alt = true;
+      else if (m === "shift") modifiers.shift = true;
+      else if (m === "meta" || m === "command" || m === "cmd") modifiers.meta = true;
+    }
+
+    const mapped = ToolExecutor.KEY_MAP[mainKey];
+    const code = mapped?.code ?? `Key${mainKey.toUpperCase()}`;
+    const keyCode = mapped?.keyCode ?? mainKey.toUpperCase().charCodeAt(0);
+    const text = mapped?.text ?? (mainKey.length === 1 ? mainKey : undefined);
+
+    await this.dispatchKey(mainKey, code, keyCode, text, modifiers);
+  }
+
+  /** 底层 CDP 按键派发（keyDown + keyUp） */
+  private async dispatchKey(
+    key: string,
+    code: string,
+    keyCode: number,
+    text?: string,
+    modifiers?: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
+  ): Promise<void> {
+    const modFlag =
+      ((modifiers?.alt ? 1 : 0)) |
+      ((modifiers?.ctrl ? 2 : 0)) |
+      ((modifiers?.meta ? 4 : 0)) |
+      ((modifiers?.shift ? 8 : 0));
+    const common = {
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      modifiers: modFlag,
+    };
+    await this.cdp.send("Input.dispatchKeyEvent", {
+      type: text ? "keyDown" : "rawKeyDown",
+      ...common,
+      text,
+    });
+    await this.cdp.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      ...common,
+    });
+  }
+
+  /**
+   * 派发单个可打印字符的完整键盘事件序列（keyDown + keyUp），
+   * 自动查找正确的 code / keyCode / shift 修饰。
+   */
+  private async dispatchChar(char: string): Promise<void> {
+    // 1. 查 CHAR_MAP（符号、空格）
+    const mapped = ToolExecutor.CHAR_MAP[char];
+    if (mapped) {
+      const mods = mapped.shift
+        ? { ctrl: false, alt: false, shift: true, meta: false }
+        : undefined;
+      await this.dispatchKey(char, mapped.code, mapped.keyCode, char, mods);
+      return;
+    }
+
+    // 2. 数字 0-9
+    if (char >= "0" && char <= "9") {
+      const keyCode = 48 + (char.charCodeAt(0) - 48);
+      await this.dispatchKey(char, `Digit${char}`, keyCode, char);
+      return;
+    }
+
+    // 3. 字母 a-z / A-Z
+    const lower = char.toLowerCase();
+    if (lower >= "a" && lower <= "z") {
+      const isUpper = char !== lower;
+      const code = `Key${lower.toUpperCase()}`;
+      const keyCode = lower.toUpperCase().charCodeAt(0); // A=65 .. Z=90
+      const mods = isUpper
+        ? { ctrl: false, alt: false, shift: true, meta: false }
+        : undefined;
+      await this.dispatchKey(char, code, keyCode, char, mods);
+      return;
+    }
+
+    // 4. 其他字符（Unicode 等）：用 charCode 近似处理
+    const keyCode = char.charCodeAt(0);
+    await this.dispatchKey(char, `Unidentified`, keyCode, char);
+  }
+
+  // ── Handle Dialog ──
+
+  /**
+   * 启用 dialog 自动拦截。应在 CDP attach 后调用一次。
+   * 页面弹出 alert/confirm/prompt/beforeunload 时，CDP 会暂停页面并发送 Page.javascriptDialogOpening 事件。
+   * 我们把它存起来，等 agent 调用 handle_dialog 工具时再响应。
+   */
+  async enableDialogInterception(): Promise<void> {
+    // 注册 CDP 事件监听（通过 Runtime.evaluate 不行，需要 CDP 事件）
+    // chrome.debugger.onEvent 已在 CdpManager 外部，这里用轮询方案替代：
+    // 实际上我们不需要事件驱动——当 dialog 出现时页面会阻塞，
+    // agent 的 screenshot/read_page 等工具也会被阻塞或返回异常，
+    // 从而提示 agent 调用 handle_dialog。
+  }
+
+  private async handleDialog(accept: boolean, promptText?: string): Promise<void> {
+    const params: Record<string, unknown> = { accept };
+    if (promptText !== undefined) {
+      params.promptText = promptText;
+    }
+    await this.cdp.send("Page.handleJavaScriptDialog", params);
   }
 }
