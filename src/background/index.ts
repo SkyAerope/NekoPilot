@@ -14,6 +14,33 @@ let conversationHistory: ChatMessage[] = [];
 /** 真正由用户发起的消息在 conversationHistory 中的索引（不含工具产生的 user 消息，例如截图） */
 let userTurnIndices: number[] = [];
 
+// MV3 service worker 会在空闲时被回收。若仅把对话历史放在内存里，SW 重启后历史
+// 就丢了——这会造成"UI 还显示着历史，但实际请求里却没有历史"的不一致。
+// 用 chrome.storage.session 持久化会话历史：跨 SW 重启保留，浏览器关闭时清空。
+const SESSION_KEY = "conversationState";
+
+/** SW 启动时尽快恢复内存中的会话历史 */
+const historyReady: Promise<void> = (async () => {
+  try {
+    const data = await chrome.storage.session.get(SESSION_KEY);
+    const state = data[SESSION_KEY] as
+      | { conversationHistory?: ChatMessage[]; userTurnIndices?: number[] }
+      | undefined;
+    if (state) {
+      if (Array.isArray(state.conversationHistory)) conversationHistory = state.conversationHistory;
+      if (Array.isArray(state.userTurnIndices)) userTurnIndices = state.userTurnIndices;
+    }
+  } catch {
+    /* storage.session 不可用时忽略，退回纯内存行为 */
+  }
+})();
+
+function persistHistory(): void {
+  chrome.storage.session
+    .set({ [SESSION_KEY]: { conversationHistory, userTurnIndices } })
+    .catch(() => {});
+}
+
 // 点击扩展图标时打开 side panel
 chrome.action.onClicked.addListener((_tab) => {
   chrome.sidePanel.open({ windowId: _tab.windowId! });
@@ -63,8 +90,10 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       // 始终重连到当前活动标签页
       try { await cdp.detach(); } catch { /* 未连接时忽略 */ }
       await cdp.attach(tab.id!);
+      await historyReady;
       userTurnIndices.push(conversationHistory.length);
       conversationHistory.push({ role: "user", content: userMessage });
+      persistHistory();
       tools.configureShortRefs(config.enableShortRefs !== false);
       tools.configureScreenshotQuality(typeof config.screenshotQuality === "number" ? config.screenshotQuality : 80);
       tools.configureCodeExecution({
@@ -78,6 +107,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       try {
         const { text, messages } = await agentLoop.run(conversationHistory);
         conversationHistory = messages;
+        persistHistory();
         agentLoop = null;
         return { result: text };
       } catch (err) {
@@ -102,6 +132,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
     case "agent:reset": {
       conversationHistory = [];
       userTurnIndices = [];
+      persistHistory();
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;
@@ -113,9 +144,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
     case "agent:truncateBeforeUserTurn": {
       // 截断对话历史到第 turnIndex 个真用户消息之前（用于重试）
       const { turnIndex } = message.payload as { turnIndex: number };
+      await historyReady;
       const cutAt = userTurnIndices[turnIndex] ?? conversationHistory.length;
       conversationHistory = conversationHistory.slice(0, cutAt);
       userTurnIndices = userTurnIndices.slice(0, turnIndex);
+      persistHistory();
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;

@@ -700,13 +700,41 @@ export default function App() {
   const stickToBottomRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 加载持久化设置
+  // 恢复持久化的对话记录：侧边栏关闭再打开时，React state 会重置，
+  // 但 background 仍保留 conversationHistory，会导致"UI 清空但请求仍带历史"。
+  // 这里把 UI 的 logs 也持久化下来并在打开时恢复，使两端保持一致。
+  const logsLoadedRef = useRef(false);
+
+  // 加载持久化设置 + 历史对话
   useEffect(() => {
-    chrome.storage.local.get(["autoMode", "settings"], (data) => {
+    chrome.storage.local.get(["autoMode", "settings", "chatLogs", "chatMeta"], (data) => {
       if (data.autoMode !== undefined) setAutoMode(data.autoMode);
       if (data.settings?.elementTextLimit != null) setElementTextLimit(data.settings.elementTextLimit);
+      if (Array.isArray(data.chatLogs) && data.chatLogs.length > 0) {
+        setLogs(data.chatLogs as LogEntry[]);
+        // 恢复 logIdCounter，避免新条目 id 与已恢复条目冲突
+        const maxId = (data.chatLogs as LogEntry[]).reduce((m, l) => Math.max(m, l.id), 0);
+        if (maxId > logIdCounter) logIdCounter = maxId;
+      }
+      if (data.chatMeta) {
+        if (typeof data.chatMeta.promptTokens === "number") setPromptTokens(data.chatMeta.promptTokens);
+        if (data.chatMeta.cacheInfo) setCacheInfo(data.chatMeta.cacheInfo);
+      }
+      logsLoadedRef.current = true;
     });
   }, []);
+
+  // 持久化对话记录（防抖），让关闭/重开侧边栏后仍能保留历史
+  useEffect(() => {
+    if (!logsLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      chrome.storage.local.set({
+        chatLogs: logs,
+        chatMeta: { promptTokens, cacheInfo },
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [logs, promptTokens, cacheInfo]);
 
   // 轮询元素选择器 hover 信息
   useEffect(() => {
@@ -1129,6 +1157,7 @@ export default function App() {
     setLogs([]);
     setPromptTokens(null);
     setCacheInfo(null);
+    chrome.storage.local.remove(["chatLogs", "chatMeta"]);
     sendMessage("agent:reset").catch(() => {});
   }, []);
 
