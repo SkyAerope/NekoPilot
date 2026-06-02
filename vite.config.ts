@@ -1,9 +1,16 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
-import { copyFileSync, mkdirSync, existsSync } from "fs";
+import { copyFileSync, mkdirSync, existsSync, writeFileSync } from "fs";
+
+const isWatch = process.argv.includes("--watch");
 
 export default defineConfig({
+  // 编译期常量：仅在 watch（开发）模式为 true。生产构建为 false，
+  // 使 background 中的自动热重载逻辑被 tree-shaking 完全移除，零运行时成本。
+  define: {
+    __DEV_RELOAD__: JSON.stringify(isWatch),
+  },
   plugins: [
     react(),
     {
@@ -23,6 +30,14 @@ export default defineConfig({
             const src = resolve(iconSrc, f);
             if (existsSync(src)) copyFileSync(src, resolve(iconsDir, f));
           }
+        }
+        // Write a reload stamp so the background script can auto-reload the
+        // extension during `vite build --watch`.
+        if (isWatch) {
+          writeFileSync(
+            resolve(distDir, "reload.json"),
+            JSON.stringify({ ts: Date.now() })
+          );
         }
       },
     },

@@ -6,6 +6,30 @@ import { ToolExecutor } from "../tools/executor";
 import { AgentLoop } from "../agent/loop";
 import type { AgentConfig, ChatMessage } from "../agent/types";
 
+// 开发期自动热重载：`pnpm dev`（vite build --watch）每次重建后会写入 dist/reload.json，
+// 这里轮询其时间戳，一旦变化就 chrome.runtime.reload() 自动重载整个扩展。
+// __DEV_RELOAD__ 是 Vite 注入的编译期常量：生产构建（pnpm build）下为 false，
+// 整个 if 块会被 tree-shaking 移除，生产产物里不存在任何这段代码，零运行时成本。
+if (__DEV_RELOAD__) {
+  let lastTs: number | null = null;
+  setInterval(async () => {
+    try {
+      const res = await fetch(chrome.runtime.getURL("reload.json"), {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const { ts } = (await res.json()) as { ts: number };
+      if (lastTs !== null && ts !== lastTs) {
+        chrome.runtime.reload();
+        return;
+      }
+      lastTs = ts;
+    } catch {
+      /* reload.json 尚未生成或读取失败时忽略 */
+    }
+  }, 1000);
+}
+
 const cdp = new CdpManager();
 const tools = new ToolExecutor(cdp);
 
