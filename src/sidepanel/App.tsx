@@ -1591,7 +1591,7 @@ export default function App() {
                 <ListItemIcon sx={{ minWidth: 28 }}>
                   <DoubleArrowIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText primaryTypographyProps={{ variant: "body2" }}>Auto mode</ListItemText>
+                <ListItemText slotProps={{ primary: { variant: "body2" } }}>Auto mode</ListItemText>
               </MenuItem>
               <MenuItem
                 onClick={() => { setAutoModeAndPersist(false); setModeMenuAnchor(null); }}
@@ -1601,7 +1601,7 @@ export default function App() {
                 <ListItemIcon sx={{ minWidth: 28 }}>
                   <PanToolAltIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText primaryTypographyProps={{ variant: "body2" }}>Ask before acting</ListItemText>
+                <ListItemText slotProps={{ primary: { variant: "body2" } }}>Ask before acting</ListItemText>
               </MenuItem>
             </Menu>
 
