@@ -8,7 +8,12 @@ export interface AgentConfig {
   showClickMarker: boolean;
   provider: "openai" | "anthropic";
   enableShortRefs: boolean;
-  screenshotQuality: number;
+  screenshotScaleMode: "off" | "claude46" | "claude47" | "custom";
+  screenshotMaxLongEdge: number;
+  screenshotMaxPixels: number;
+  enableScreenshotPruning: boolean;
+  screenshotKeepN: number;
+  screenshotPruneTrigger: number;
   enableCodeExecution: boolean;
   codeExecutionTimeoutMs: number;
   codeExecutionMaxOutputChars: number;
@@ -26,6 +31,7 @@ export type AgentEventType =
   | "message_to_thinking"
   | "assistant_turn_done"
   | "usage"
+  | "screenshots_pruned"
   | "error"
   | "done";
 

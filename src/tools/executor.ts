@@ -4,6 +4,8 @@ import type { CdpManager } from "../background/cdp";
 import { JsSandbox } from "./jsSandbox";
 import type { ToolResult } from "./types";
 
+export type ScreenshotScaleMode = "off" | "claude46" | "claude47" | "custom";
+
 export class ToolExecutor {
   private sandbox = new JsSandbox();
   private codeExecutionEnabled = true;
@@ -18,13 +20,25 @@ export class ToolExecutor {
   private shortRefMap = new Map<string, string>();
   private shortRefCounter = 0;
   private shortRefsEnabled = false;
-  private screenshotQuality = 80;
+  // 截图缩放：将截图限制在 API 图像限制内，同时归一化高 DPI 坐标。
+  // 模型看到的是"显示坐标空间"(视口×k)，执行时换算回视口坐标。
+  private screenshotScaleMode: ScreenshotScaleMode = "claude46";
+  private screenshotMaxLongEdge = 1568;
+  private screenshotMaxPixels = 1_150_000;
 
   configureShortRefs(enabled: boolean): void {
     this.shortRefsEnabled = enabled;
   }
-  configureScreenshotQuality(quality: number): void {
-    this.screenshotQuality = Math.max(10, Math.min(100, Math.round(quality)));
+  configureScreenshotScaling(
+    mode: ScreenshotScaleMode,
+    maxLongEdge?: number,
+    maxPixels?: number,
+  ): void {
+    this.screenshotScaleMode = mode;
+    if (mode === "custom") {
+      this.screenshotMaxLongEdge = Math.max(0, Math.round(maxLongEdge ?? 0));
+      this.screenshotMaxPixels = Math.max(0, Math.round(maxPixels ?? 0));
+    }
   }
   configureCodeExecution(options: {
     enabled?: boolean;
@@ -102,6 +116,56 @@ export class ToolExecutor {
       throw new Error(`Page script error: ${desc}`);
     }
     return result.result.value;
+  }
+
+  // ── 截图缩放与坐标空间换算 ──
+
+  /** 当前模式下的缩放限制；null 表示不缩放 */
+  private getScaleLimits(): { maxLongEdge: number; maxPixels: number } | null {
+    switch (this.screenshotScaleMode) {
+      case "off":
+        return null;
+      case "claude46":
+        return { maxLongEdge: 1568, maxPixels: 1_150_000 };
+      case "claude47":
+        return { maxLongEdge: 2576, maxPixels: 3_750_000 };
+      case "custom":
+        return { maxLongEdge: this.screenshotMaxLongEdge, maxPixels: this.screenshotMaxPixels };
+    }
+  }
+
+  /** CSS 视口尺寸（CSS px，与页面脚本 getBoundingClientRect 同一坐标系） */
+  private async getViewportSize(): Promise<{ width: number; height: number }> {
+    const metrics = await this.cdp.send<{
+      cssVisualViewport?: { clientWidth: number; clientHeight: number };
+      cssLayoutViewport?: { clientWidth: number; clientHeight: number };
+    }>("Page.getLayoutMetrics", {});
+    const vp = metrics.cssVisualViewport ?? metrics.cssLayoutViewport;
+    if (!vp || !vp.clientWidth || !vp.clientHeight) {
+      throw new Error("Failed to get viewport size from Page.getLayoutMetrics");
+    }
+    return { width: vp.clientWidth, height: vp.clientHeight };
+  }
+
+  /** 计算缩放系数 k（≤1）：显示坐标 = 视口坐标 × k；0 表示该项无限制 */
+  private computeScale(width: number, height: number): number {
+    const limits = this.getScaleLimits();
+    if (!limits) return 1;
+    let k = 1;
+    if (limits.maxPixels > 0) {
+      k = Math.min(k, Math.sqrt(limits.maxPixels / (width * height)));
+    }
+    if (limits.maxLongEdge > 0) {
+      k = Math.min(k, limits.maxLongEdge / Math.max(width, height));
+    }
+    return Math.min(1, k);
+  }
+
+  /** 按当前视口即时计算缩放系数 */
+  private async getScaleFactor(): Promise<number> {
+    if (this.screenshotScaleMode === "off") return 1;
+    const { width, height } = await this.getViewportSize();
+    return this.computeScale(width, height);
   }
 
   async execute(
@@ -237,6 +301,10 @@ export class ToolExecutor {
   // ── Click 坐标标记 ──
 
   async showClickMarker(x: number, y: number): Promise<void> {
+    // 传入的是模型（显示空间）坐标，换算回视口坐标
+    const k = await this.getScaleFactor();
+    x = Math.round(x / k);
+    y = Math.round(y / k);
     const expression = `
       (function() {
         // 递增 token 让任何残留的 anchored marker rAF 循环停止
@@ -364,6 +432,10 @@ export class ToolExecutor {
 
   /** 显示 scroll 位置标记（带方向箭头） */
   async showScrollMarker(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+    // 传入的是模型（显示空间）坐标，换算回视口坐标；delta 仅用于箭头方向无需换算
+    const k = await this.getScaleFactor();
+    x = Math.round(x / k);
+    y = Math.round(y / k);
     // 计算箭头方向：以最大分量为准；若两轴均为 0 则按向下处理
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
@@ -399,15 +471,19 @@ export class ToolExecutor {
   // ── 具体 Tool 实现 ──
 
   private async screenshot(): Promise<{ data: string; mime: string }> {
-    const useJpeg = this.screenshotQuality < 100;
-    const params: Record<string, unknown> = useJpeg
-      ? { format: "jpeg", quality: this.screenshotQuality }
-      : { format: "png" };
-    const result = await this.cdp.send<{ data: string }>(
-      "Page.captureScreenshot",
-      params
-    );
-    return { data: result.data, mime: useJpeg ? "image/jpeg" : "image/png" };
+    if (this.screenshotScaleMode === "off") {
+      const result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
+      return { data: result.data, mime: "image/png" };
+    }
+    // clip 以 CSS px 为单位：同时完成高 DPI 归一化（DPR>1 时输出不再是设备像素）
+    // 与降采样到 API 图像限制内（scale=k）。
+    const { width, height } = await this.getViewportSize();
+    const k = this.computeScale(width, height);
+    const result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", {
+      format: "png",
+      clip: { x: 0, y: 0, width, height, scale: k },
+    });
+    return { data: result.data, mime: "image/png" };
   }
 
   private async executeJs(description: string, code: string): Promise<{
@@ -440,8 +516,11 @@ export class ToolExecutor {
   }
 
   private async readPage(): Promise<string> {
+    // 输出坐标乘以缩放系数，与截图坐标空间保持一致
+    const K = await this.getScaleFactor();
     const expression = `
       (function() {
+        const K = ${K};
         function simplify(el, depth) {
           if (depth > 6) return null;
           const rect = el.getBoundingClientRect();
@@ -455,7 +534,7 @@ export class ToolExecutor {
           if (!role && !text && children.length === 0 && !['input','button','a','select','textarea','img'].includes(tag)) return null;
           return { tag, role, text,
             ref: tag + '[' + Array.from(el.parentElement?.children || []).indexOf(el) + ']',
-            rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
+            rect: { x: Math.round(rect.x * K), y: Math.round(rect.y * K), w: Math.round(rect.width * K), h: Math.round(rect.height * K) },
             children: children.length ? children : undefined
           };
         }
@@ -485,8 +564,11 @@ export class ToolExecutor {
   }
 
   private async readPageInteractive(): Promise<string> {
+    // 输出坐标乘以缩放系数，与截图坐标空间保持一致
+    const K = await this.getScaleFactor();
     const expression = `
       (function() {
+        const K = ${K};
         const selectors = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [tabindex], [onclick]';
         const elements = document.querySelectorAll(selectors);
         const lines = [];
@@ -523,8 +605,8 @@ export class ToolExecutor {
             if (text) lines.push('  text: ' + JSON.stringify(text));
             if (ph) lines.push('  placeholder: ' + JSON.stringify(ph));
             if (val) lines.push('  value: ' + JSON.stringify(val));
-            lines.push('  position: {x: ' + rect.x.toFixed(0) + ', y: ' + rect.y.toFixed(0) + ', width: ' + rect.width.toFixed(0) + ', height: ' + rect.height.toFixed(0) + '}');
-            lines.push('  center: {x: ' + (rect.x + rect.width / 2).toFixed(0) + ', y: ' + (rect.y + rect.height / 2).toFixed(0) + '}');
+            lines.push('  position: {x: ' + (rect.x * K).toFixed(0) + ', y: ' + (rect.y * K).toFixed(0) + ', width: ' + (rect.width * K).toFixed(0) + ', height: ' + (rect.height * K).toFixed(0) + '}');
+            lines.push('  center: {x: ' + ((rect.x + rect.width / 2) * K).toFixed(0) + ', y: ' + ((rect.y + rect.height / 2) * K).toFixed(0) + '}');
           } catch(e) { /* 跳过异常元素 */ }
         });
         if (lines.length === 0) return 'no_results: 当前页面没有可见的可交互元素';
@@ -569,8 +651,11 @@ export class ToolExecutor {
       return;
     }
 
-    // 场景 2: 使用坐标 —— 用 elementFromPoint 获取元素后 scrollIntoViewIfNeeded
+    // 场景 2: 使用坐标 —— 模型坐标基于缩放后的截图，先换算回视口坐标
     if (x !== undefined && y !== undefined) {
+      const k = await this.getScaleFactor();
+      x = Math.round(x / k);
+      y = Math.round(y / k);
       const prepExpr = `(function() {
         const el = document.elementFromPoint(${x}, ${y});
         if (el && typeof el.scrollIntoViewIfNeeded === 'function') {
@@ -688,12 +773,14 @@ export class ToolExecutor {
     deltaX: number,
     deltaY: number
   ): Promise<void> {
+    // 模型坐标/滚动量基于缩放后的截图，换算回视口坐标系
+    const k = await this.getScaleFactor();
     await this.cdp.send("Input.dispatchMouseEvent", {
       type: "mouseWheel",
-      x,
-      y,
-      deltaX,
-      deltaY,
+      x: Math.round(x / k),
+      y: Math.round(y / k),
+      deltaX: Math.round(deltaX / k),
+      deltaY: Math.round(deltaY / k),
     });
   }
 
@@ -704,6 +791,12 @@ export class ToolExecutor {
     endY: number,
     steps: number
   ): Promise<void> {
+    // 模型坐标基于缩放后的截图，换算回视口坐标系
+    const k = await this.getScaleFactor();
+    startX = Math.round(startX / k);
+    startY = Math.round(startY / k);
+    endX = Math.round(endX / k);
+    endY = Math.round(endY / k);
     await this.cdp.send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       x: startX,
@@ -742,8 +835,11 @@ export class ToolExecutor {
     limit: number,
     tagFilter: string
   ): Promise<string> {
+    // 输出坐标乘以缩放系数，与截图坐标空间保持一致
+    const K = await this.getScaleFactor();
     const expression = `
       (function() {
+        const K = ${K};
         const text = ${JSON.stringify(text)}.toLowerCase();
         const limit = ${limit};
         const tagFilter = ${JSON.stringify(tagFilter)}.toLowerCase();
@@ -773,7 +869,7 @@ export class ToolExecutor {
           }
           const rawText = (el.textContent || '').trim();
           const textDisplay = rawText.length > 120 ? rawText.slice(0, 120) + '...(+' + (rawText.length - 120) + ' chars)' : rawText;
-          results.push({ tag: el.tagName.toLowerCase(), text: textDisplay, selector, rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } });
+          results.push({ tag: el.tagName.toLowerCase(), text: textDisplay, selector, rect: { x: Math.round(rect.x * K), y: Math.round(rect.y * K), w: Math.round(rect.width * K), h: Math.round(rect.height * K) } });
         }
 
         // 1. TreeWalker 遍历所有文本节点
@@ -836,13 +932,16 @@ export class ToolExecutor {
 
   private async getElementRect(selector: string): Promise<string> {
     selector = this.resolveShortRef(selector);
+    // 输出坐标乘以缩放系数，与截图坐标空间保持一致
+    const K = await this.getScaleFactor();
     const expression = `
       (function() {
+        const K = ${K};
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return 'error: Element not found';
         const r = el.getBoundingClientRect();
-        const x = Math.round(r.x), y = Math.round(r.y);
-        const w = Math.round(r.width), h = Math.round(r.height);
+        const x = Math.round(r.x * K), y = Math.round(r.y * K);
+        const w = Math.round(r.width * K), h = Math.round(r.height * K);
         return 'position: {x: ' + x + ', y: ' + y + ', width: ' + w + ', height: ' + h + '}'
           + '\\ncenter: {x: ' + Math.round(x + w/2) + ', y: ' + Math.round(y + h/2) + '}';
       })()
@@ -873,7 +972,8 @@ export class ToolExecutor {
       return;
     }
     if (x !== undefined && y !== undefined) {
-      await this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      const k = await this.getScaleFactor();
+      await this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x / k), y: Math.round(y / k) });
       return;
     }
     throw new Error("hover requires either (x, y) or selector");

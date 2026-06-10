@@ -82,6 +82,7 @@ interface LogEntry {
   permissionResolved?: boolean;
   screenshotData?: string;
   screenshotMime?: string;
+  prunedFromContext?: boolean;
   pickedElements?: PickedElement[];
   // thinking 相关
   thinkingDone?: boolean;
@@ -941,6 +942,14 @@ export default function App() {
         return;
       }
 
+      if (event.type === "screenshots_pruned") {
+        const ids = (event.data as { ids: string[] }).ids ?? [];
+        setLogs((prev) => prev.map((log) =>
+          log.toolCallId && ids.includes(log.toolCallId) ? { ...log, prunedFromContext: true } : log
+        ));
+        return;
+      }
+
       if (event.type === "thinking") {
         const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
         setLogs((prev) => [...prev, {
@@ -1095,7 +1104,12 @@ export default function App() {
       showClickMarker?: boolean;
       provider?: string;
       enableShortRefs?: boolean;
-      screenshotQuality?: number;
+      screenshotScaleMode?: string;
+      screenshotMaxLongEdge?: number;
+      screenshotMaxPixels?: number;
+      enableScreenshotPruning?: boolean;
+      screenshotKeepN?: number;
+      screenshotPruneTrigger?: number;
       enableCodeExecution?: boolean;
       codeExecutionTimeoutMs?: number;
       codeExecutionMaxOutputChars?: number;
@@ -1122,7 +1136,12 @@ export default function App() {
           showClickMarker: settings.showClickMarker !== false,
           provider: settings.provider === "anthropic" ? "anthropic" : "openai",
           enableShortRefs: settings.enableShortRefs !== false,
-          screenshotQuality: typeof settings.screenshotQuality === "number" ? settings.screenshotQuality : 80,
+          screenshotScaleMode: (["off", "claude46", "claude47", "custom"].includes(settings.screenshotScaleMode ?? "") ? settings.screenshotScaleMode : "claude46") as "off" | "claude46" | "claude47" | "custom",
+          screenshotMaxLongEdge: typeof settings.screenshotMaxLongEdge === "number" ? settings.screenshotMaxLongEdge : 1568,
+          screenshotMaxPixels: typeof settings.screenshotMaxPixels === "number" ? settings.screenshotMaxPixels : 1150000,
+          enableScreenshotPruning: settings.enableScreenshotPruning !== false,
+          screenshotKeepN: typeof settings.screenshotKeepN === "number" ? settings.screenshotKeepN : 3,
+          screenshotPruneTrigger: typeof settings.screenshotPruneTrigger === "number" ? settings.screenshotPruneTrigger : 12,
           enableCodeExecution: settings.enableCodeExecution !== false,
           codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
           codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
@@ -1265,7 +1284,7 @@ export default function App() {
       ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
       .join("\n") ?? "";
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotQuality?: number; enableCodeExecution?: boolean; codeExecutionTimeoutMs?: number; codeExecutionMaxOutputChars?: number; enablePromptCaching?: boolean }>("settings:get");
+    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotScaleMode?: string; screenshotMaxLongEdge?: number; screenshotMaxPixels?: number; enableScreenshotPruning?: boolean; screenshotKeepN?: number; screenshotPruneTrigger?: number; enableCodeExecution?: boolean; codeExecutionTimeoutMs?: number; codeExecutionMaxOutputChars?: number; enablePromptCaching?: boolean }>("settings:get");
     if (!settings?.apiKey) {
       setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
       return;
@@ -1285,7 +1304,12 @@ export default function App() {
           showClickMarker: settings.showClickMarker !== false,
           provider: settings.provider === "anthropic" ? "anthropic" : "openai",
           enableShortRefs: settings.enableShortRefs !== false,
-          screenshotQuality: typeof settings.screenshotQuality === "number" ? settings.screenshotQuality : 80,
+          screenshotScaleMode: (["off", "claude46", "claude47", "custom"].includes(settings.screenshotScaleMode ?? "") ? settings.screenshotScaleMode : "claude46") as "off" | "claude46" | "claude47" | "custom",
+          screenshotMaxLongEdge: typeof settings.screenshotMaxLongEdge === "number" ? settings.screenshotMaxLongEdge : 1568,
+          screenshotMaxPixels: typeof settings.screenshotMaxPixels === "number" ? settings.screenshotMaxPixels : 1150000,
+          enableScreenshotPruning: settings.enableScreenshotPruning !== false,
+          screenshotKeepN: typeof settings.screenshotKeepN === "number" ? settings.screenshotKeepN : 3,
+          screenshotPruneTrigger: typeof settings.screenshotPruneTrigger === "number" ? settings.screenshotPruneTrigger : 12,
           enableCodeExecution: settings.enableCodeExecution !== false,
           codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
           codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
@@ -2105,8 +2129,14 @@ function ToolCallStep({
             sx={{
               width: 80, height: 50, objectFit: "cover",
               borderRadius: 1, mt: 0.5, border: 1, borderColor: "divider", display: "block",
+              ...(entry.prunedFromContext ? { opacity: 0.5, filter: "grayscale(0.8)" } : {}),
             }}
           />
+          {entry.prunedFromContext && (
+            <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: 0.25 }}>
+              已从上下文删除
+            </Typography>
+          )}
         </Collapse>
       )}
 

@@ -119,7 +119,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       conversationHistory.push({ role: "user", content: userMessage });
       persistHistory();
       tools.configureShortRefs(config.enableShortRefs !== false);
-      tools.configureScreenshotQuality(typeof config.screenshotQuality === "number" ? config.screenshotQuality : 80);
+      tools.configureScreenshotScaling(
+        config.screenshotScaleMode ?? "claude46",
+        config.screenshotMaxLongEdge,
+        config.screenshotMaxPixels,
+      );
       tools.configureCodeExecution({
         enabled: config.enableCodeExecution !== false,
         timeoutMs: typeof config.codeExecutionTimeoutMs === "number" ? config.codeExecutionTimeoutMs : 1000,

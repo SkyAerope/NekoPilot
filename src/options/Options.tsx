@@ -37,7 +37,12 @@ interface Settings {
   elementTextLimit: number;
   showClickMarker: boolean;
   enableShortRefs: boolean;
-  screenshotQuality: number;
+  screenshotScaleMode: "off" | "claude46" | "claude47" | "custom";
+  screenshotMaxLongEdge: number;
+  screenshotMaxPixels: number;
+  enableScreenshotPruning: boolean;
+  screenshotKeepN: number;
+  screenshotPruneTrigger: number;
   enableCodeExecution: boolean;
   codeExecutionTimeoutMs: number;
   codeExecutionMaxOutputChars: number;
@@ -52,7 +57,12 @@ const defaultSettings: Settings = {
   elementTextLimit: 128,
   showClickMarker: true,
   enableShortRefs: true,
-  screenshotQuality: 80,
+  screenshotScaleMode: "claude46",
+  screenshotMaxLongEdge: 1568,
+  screenshotMaxPixels: 1150000,
+  enableScreenshotPruning: true,
+  screenshotKeepN: 3,
+  screenshotPruneTrigger: 12,
   enableCodeExecution: true,
   codeExecutionTimeoutMs: 1000,
   codeExecutionMaxOutputChars: 6000,
@@ -315,6 +325,7 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
               允许模型在独立 QuickJS 沙箱中执行纯 JavaScript 计算代码。该工具没有 DOM、网络或扩展 API；在 Ask 模式下仍需审批。
             </Typography>
 
+            {settings.enableCodeExecution && (<>
             <Divider />
 
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -358,28 +369,85 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
             <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
               限制 execute_js 返回结果和 console 输出的总字符数；超出后会被截断并标记 truncated。
             </Typography>
+            </>)}
 
             <Divider />
 
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              截图压缩质量：{settings.screenshotQuality}%
+              截图缩放
+            </Typography>
+            <TextField
+              select
+              size="small"
+              value={settings.screenshotScaleMode}
+              onChange={(e) => updateSettings({ screenshotScaleMode: e.target.value as Settings["screenshotScaleMode"] })}
+              fullWidth
+            >
+              <MenuItem value="off">关</MenuItem>
+              <MenuItem value="claude46">1568（Claude 4.6）</MenuItem>
+              <MenuItem value="claude47">2576（Claude 4.7）</MenuItem>
+              <MenuItem value="custom">自定义</MenuItem>
+            </TextField>
+            {settings.screenshotScaleMode === "custom" && (
+              <Stack direction="row" spacing={2}>
+                <TextField
+                  label="最长边像素"
+                  type="number"
+                  size="small"
+                  value={settings.screenshotMaxLongEdge}
+                  onChange={(e) => updateSettings({ screenshotMaxLongEdge: Math.max(0, Number(e.target.value) || 0) })}
+                  helperText="0 = 无限制"
+                />
+                <TextField
+                  label="截图最大像素"
+                  type="number"
+                  size="small"
+                  value={settings.screenshotMaxPixels}
+                  onChange={(e) => updateSettings({ screenshotMaxPixels: Math.max(0, Number(e.target.value) || 0) })}
+                  helperText="0 = 无限制"
+                />
+              </Stack>
+            )}
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+              将截图缩放到模型 API 的图像限制内，避免被静默降采样导致点击坐标偏移；同时归一化高 DPI 屏幕的坐标。选“关”时保持原始截图。
+            </Typography>
+
+            <Divider />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.enableScreenshotPruning}
+                  onChange={(e) => updateSettings({ enableScreenshotPruning: e.target.checked })}
+                />
+              }
+              label="自动修剪历史截图"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+              上下文中超过 {settings.screenshotPruneTrigger} 张截图时，去除历史截图，保留最新 {settings.screenshotKeepN} 张
             </Typography>
             <Slider
-              value={settings.screenshotQuality}
-              onChange={(_e, v) => updateSettings({ screenshotQuality: v as number })}
-              min={10}
-              max={100}
-              step={5}
+              value={[settings.screenshotKeepN, settings.screenshotPruneTrigger]}
+              onChange={(_e, v) => {
+                const [keepN, trigger] = v as number[];
+                updateSettings({ screenshotKeepN: keepN, screenshotPruneTrigger: trigger });
+              }}
+              disabled={!settings.enableScreenshotPruning}
+              min={1}
+              max={30}
+              step={1}
+              disableSwap
               marks={[
-                { value: 10, label: "10%" },
-                { value: 50, label: "50%" },
-                { value: 100, label: "100%" },
+                { value: 1, label: "1" },
+                { value: 10, label: "10" },
+                { value: 20, label: "20" },
+                { value: 30, label: "30" },
               ]}
               valueLabelDisplay="auto"
               sx={{ mt: -0.5 }}
             />
             <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-              较低的质量可显著减少 token 消耗。100% 时使用无损 PNG，否则使用 JPEG 压缩。
+              被修剪的截图会从发送给模型的上下文中移除并替换为占位文本，可显著降低长任务的 token 消耗；侧边栏中的缩略图不受影响。
             </Typography>
           </Stack>
         </Paper>
