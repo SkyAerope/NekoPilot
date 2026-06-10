@@ -1,9 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
-import { copyFileSync, mkdirSync, existsSync, writeFileSync } from "fs";
+import { copyFileSync, mkdirSync, existsSync, writeFileSync, readFileSync } from "fs";
+import sharp from "sharp";
 
 const isWatch = process.argv.includes("--watch");
+
+// Chrome 扩展图标只支持 PNG（不支持 SVG），需在构建期把 icon.svg 渲染为多尺寸 PNG。
+const ICON_SIZES = [16, 32, 48, 128];
 
 export default defineConfig({
   // 编译期常量：仅在 watch（开发）模式为 true。生产构建为 false，
@@ -15,7 +19,7 @@ export default defineConfig({
     react(),
     {
       name: "copy-manifest",
-      closeBundle() {
+      async closeBundle() {
         const distDir = resolve(__dirname, "dist");
         if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
         copyFileSync(
@@ -24,12 +28,18 @@ export default defineConfig({
         );
         const iconsDir = resolve(distDir, "icons");
         if (!existsSync(iconsDir)) mkdirSync(iconsDir, { recursive: true });
-        const iconSrc = resolve(__dirname, "icons");
-        if (existsSync(iconSrc)) {
-          for (const f of ["icon.svg"]) {
-            const src = resolve(iconSrc, f);
-            if (existsSync(src)) copyFileSync(src, resolve(iconsDir, f));
-          }
+        // 从 SVG 渲染各尺寸 PNG 到 dist/icons/。
+        const svgPath = resolve(__dirname, "icons", "icon.svg");
+        if (existsSync(svgPath)) {
+          const svg = readFileSync(svgPath);
+          await Promise.all(
+            ICON_SIZES.map((size) =>
+              sharp(svg)
+                .resize(size, size)
+                .png()
+                .toFile(resolve(iconsDir, `icon-${size}.png`))
+            )
+          );
         }
         // Write a reload stamp so the background script can auto-reload the
         // extension during `vite build --watch`.
