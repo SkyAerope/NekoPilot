@@ -48,6 +48,7 @@ import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "./markdown";
 import { IconAction, ReferenceChip, WorkingIndicator } from "./controls";
 import { StepsGroup } from "./timeline";
+import { useBottomScroll } from "./use-bottom-scroll";
 import {
   type LogEntry,
   type PickedElement,
@@ -83,9 +84,8 @@ export default function App() {
     creation: number;
     read: number;
   } | null>(null);
-  const logsBoxRef = useRef<HTMLDivElement>(null);
+  const logsScroll = useBottomScroll(logs);
   const logsEndRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 恢复持久化的对话记录：侧边栏关闭再打开时，React state 会重置，
@@ -514,23 +514,6 @@ export default function App() {
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
-
-  const handleLogsScroll = useCallback(() => {
-    const el = logsBoxRef.current;
-    if (!el) return;
-    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceToBottom < 48;
-  }, []);
-
-  // 自动滚动：只有用户仍停在底部附近时才跟随；用户向上滚动后暂停，直到再次滚到底部。
-  useEffect(() => {
-    if (!stickToBottomRef.current) return;
-    const el = logsBoxRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-    });
-  }, [logs]);
 
   // 检查连接状态
   useEffect(() => {
@@ -1034,8 +1017,11 @@ export default function App() {
         </IconAction>
       </header>
       <div
-        ref={logsBoxRef}
-        onScroll={handleLogsScroll}
+        ref={logsScroll.scrollRef}
+        onScroll={logsScroll.onScroll}
+        onWheelCapture={logsScroll.onWheelCapture}
+        onPointerDownCapture={logsScroll.onPointerDownCapture}
+        onKeyDownCapture={logsScroll.onKeyDownCapture}
         className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
       >
         {turns.length === 0 && (
@@ -1305,21 +1291,29 @@ export default function App() {
                   </TooltipContent>
                 </Tooltip>
               )}
-              <PromptInputButton
-                aria-label="选择页面元素"
-                title="选择页面元素"
-                onClick={handlePickElement}
-                disabled={picking}
-              >
-                <MousePointer2 className={cn(picking && "text-primary")} />
-              </PromptInputButton>
-              <PromptInputButton
-                aria-label="添加附件"
-                title="添加附件"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Paperclip />
-              </PromptInputButton>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PromptInputButton
+                    aria-label="选择页面元素"
+                    onClick={handlePickElement}
+                    disabled={picking}
+                  >
+                    <MousePointer2 className={cn(picking && "text-primary")} />
+                  </PromptInputButton>
+                </TooltipTrigger>
+                <TooltipContent>选择页面元素</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PromptInputButton
+                    aria-label="添加附件"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Paperclip />
+                  </PromptInputButton>
+                </TooltipTrigger>
+                <TooltipContent>添加附件</TooltipContent>
+              </Tooltip>
               <PromptInputSubmit
                 type={running ? "button" : "submit"}
                 status={running ? "streaming" : "ready"}

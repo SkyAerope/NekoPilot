@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
+import { useState, useMemo, lazy, Suspense } from "react";
 import {
   Brain,
   Camera,
@@ -31,6 +31,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "./markdown";
 import { IconAction } from "./controls";
+import { useBottomScroll } from "./use-bottom-scroll";
 import {
   type LogEntry,
   getToolLabel,
@@ -220,7 +221,6 @@ function TimelineStep({
 function ThinkingStep({ entry }: { entry: LogEntry }) {
   const [expanded, setExpanded] = useState(false);
   const [userTouched, setUserTouched] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const { think } = useMemo(
     () => splitThinkText(entry.content),
     [entry.content],
@@ -228,14 +228,11 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
   const content = think || entry.content.replace(/<\/?think(?:ing)?>/gi, "");
   const done = !!entry.thinkingDone;
   const open = done || userTouched ? expanded : true;
+  const thinkingScroll = useBottomScroll(content, !done && open);
   const preview = content
     .split("\n")
     .find((line) => line.trim())
     ?.slice(0, 60);
-  useEffect(() => {
-    if (!done && scrollRef.current)
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [content, done, open]);
   return (
     <Reasoning
       className="mb-0"
@@ -269,7 +266,11 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
       </ReasoningTrigger>
       <CollapsibleContent>
         <div
-          ref={scrollRef}
+          ref={thinkingScroll.scrollRef}
+          onScroll={thinkingScroll.onScroll}
+          onWheelCapture={thinkingScroll.onWheelCapture}
+          onPointerDownCapture={thinkingScroll.onPointerDownCapture}
+          onKeyDownCapture={thinkingScroll.onKeyDownCapture}
           className="max-h-50 overflow-y-auto rounded-md border px-3 py-3 text-muted-foreground"
         >
           <MarkdownMessage content={content} streaming={!done} />

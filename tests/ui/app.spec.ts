@@ -194,6 +194,121 @@ test("长对话仅在聊天区滚动，整页不会出现底部空白", async ({
   ).toBeInViewport();
 });
 
+for (const mode of ["正文", "思考", "思考框"] as const) {
+  test(`${mode}流式输出时一次向上滚轮即可暂停跟随，回到底部后恢复`, async ({
+    page,
+  }) => {
+    await installHarness(page, {
+      chatLogs: Array.from({ length: 12 }, (_, index) => ({
+        id: index + 1,
+        type: index % 2 ? "assistant" : "user",
+        content: `历史消息 ${index + 1}\n${"历史内容。\n\n".repeat(4)}`,
+        timestamp: index + 1,
+      })),
+    });
+    await page.goto("/sidepanel.html");
+    await page.getByRole("textbox", { name: "任务内容" }).fill("继续输出");
+    await page.getByRole("button", { name: "发送消息", exact: true }).click();
+    await emit(page, "message", "");
+    const content = "流式内容。\n\n".repeat(30);
+    await emit(
+      page,
+      "message_delta",
+      mode === "正文" ? content : `<think>${content}`,
+    );
+
+    const chat = page.locator("#root > div > div");
+    const scroller =
+      mode === "思考框" ? chat.locator(".overflow-y-auto") : chat;
+    const distanceToBottom = () =>
+      scroller.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
+      );
+    await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+    expect(
+      await scroller.evaluate(
+        (element) => element.scrollHeight - element.clientHeight,
+      ),
+    ).toBeGreaterThan(100);
+    await scroller.hover();
+    await page.mouse.wheel(0, -24);
+    await expect.poll(distanceToBottom).toBeGreaterThan(10);
+    const pausedTop = await scroller.evaluate((element) => element.scrollTop);
+    for (let index = 0; index < 5; index++) {
+      await emit(page, "message_delta", `新增段落 ${index}。\n\n`);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      expect(
+        await scroller.evaluate((element) => element.scrollTop),
+      ).toBeCloseTo(pausedTop, 0);
+    }
+
+    await page.mouse.wheel(0, 10000);
+    await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+    await emit(page, "message_delta", "恢复跟随。\n\n".repeat(4));
+    await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+    if (mode === "思考框") {
+      await emit(
+        page,
+        "message_delta",
+        `</think>${"后续正文。\n\n".repeat(30)}`,
+      );
+      await expect
+        .poll(() =>
+          chat.evaluate(
+            (element) =>
+              element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+    }
+  });
+}
+
+test("思考框上划后，延迟到达的底部滚动事件不会重新开启吸附", async ({
+  page,
+}) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await emit(page, "thinking", "思考内容。\n\n".repeat(30));
+  const scroller = page.locator(".max-h-50.overflow-y-auto");
+  await expect
+    .poll(() =>
+      scroller.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+  await scroller.evaluate((element) => {
+    // 模拟旧滚动操作的事件晚于新滚轮输入到达。
+    element.scrollTop -= 1;
+    element.dispatchEvent(new Event("scroll"));
+    element.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -24, bubbles: true }),
+    );
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const pausedTop = await scroller.evaluate((element) => element.scrollTop);
+  await emit(page, "thinking_delta", "新的思考段落。\n\n".repeat(5));
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(
+    pausedTop,
+    0,
+  );
+});
+
 test("设置保留自由模型名、自动保存和条件字段", async ({ page }) => {
   await installHarness(page);
   await page.goto("/options.html");
@@ -638,6 +753,13 @@ test("页面元素引用、附件删除与窄侧边栏布局", async ({ page }) 
   await installHarness(page);
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto("/sidepanel.html");
+  for (const label of ["选择页面元素", "添加附件"]) {
+    const button = page.getByRole("button", { name: label, exact: true });
+    await button.hover();
+    await expect(page.getByRole("tooltip")).toHaveText(label);
+    await page.mouse.move(0, 0, { steps: 5 });
+    await expect(page.getByRole("tooltip")).toBeHidden();
+  }
   await page.getByRole("button", { name: "选择页面元素", exact: true }).click();
   await expect(page.getByText("<button> 提交", { exact: true })).toBeVisible();
   await page
