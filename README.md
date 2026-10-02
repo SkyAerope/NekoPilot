@@ -27,18 +27,18 @@ NekoPilot 是一个运行在 Chrome 侧边栏的浏览器自动化助手。它�
 
 ## 🛠️ 工具集
 
-| 工具 | 作用 |
-| --- | --- |
-| `screenshot` | 截取当前视口（base64 PNG） |
-| `read_page_text` | 读取 `body.innerText`，支持分页 |
-| `read_page` | 简化 DOM 树，含位置和 role |
-| `read_page_interactive` | 列出所有可见可交互元素 + selector + center |
-| `find_element` | 按文本搜索元素，返回 selector 与坐标 |
-| `get_element_text` / `get_element_rect` | 单元素细查 |
-| `click` | 坐标或 selector 点击，可切 CDP / `element.click()` |
-| `set_input` | 聚焦并输入，可切 CDP `insertText` / 直接赋值 |
-| `scroll` / `drag` | 鼠标滚轮 / 拖拽 |
-| `navigate` / `wait` | URL 跳转、定时等待 |
+| 工具                                    | 作用                                               |
+| --------------------------------------- | -------------------------------------------------- |
+| `screenshot`                            | 截取当前视口（base64 PNG）                         |
+| `read_page_text`                        | 读取 `body.innerText`，支持分页                    |
+| `read_page`                             | 简化 DOM 树，含位置和 role                         |
+| `read_page_interactive`                 | 列出所有可见可交互元素 + selector + center         |
+| `find_element`                          | 按文本搜索元素，返回 selector 与坐标               |
+| `get_element_text` / `get_element_rect` | 单元素细查                                         |
+| `click`                                 | 坐标或 selector 点击，可切 CDP / `element.click()` |
+| `set_input`                             | 聚焦并输入，可切 CDP `insertText` / 直接赋值       |
+| `scroll` / `drag`                       | 鼠标滚轮 / 拖拽                                    |
+| `navigate` / `wait`                     | URL 跳转、定时等待                                 |
 
 工具定义见 [`src/tools/definitions.ts`](src/tools/definitions.ts)。
 
@@ -101,7 +101,14 @@ src/
 │   ├── executor.ts     # CDP 实际执行
 │   └── types.ts        # OpenAI / Anthropic schema 适配
 ├── sidepanel/          # 侧边栏 UI（聊天 / 时间线 / 思考块）
-│   └── App.tsx
+│   ├── App.tsx          # 事件处理与聊天状态
+│   ├── model.ts         # 展示模型、分组与工具摘要
+│   ├── timeline.tsx     # 思考 / 工具 / 审批时间线
+│   ├── markdown.tsx     # Markdown 与流式公式兼容
+│   └── controls.tsx     # 元素引用标签与通用控件
+├── components/
+│   ├── ui/              # shadcn/ui 基础组件
+│   └── ai-elements/     # AI Elements 聊天组件
 ├── options/            # 设置页（BYOK 配置）
 └── shared/             # 主题、消息通信、存储
 ```
@@ -122,7 +129,9 @@ sidepanel  ──message──▶  background (Service Worker)
 ## ⚙️ 技术栈
 
 - **构建** — Vite 6 + TypeScript 5（严格模式）
-- **UI** — React 19 + MUI 7 + react-markdown / remark-gfm
+- **UI** — React 19 + shadcn/ui + AI Elements + Tailwind CSS 4
+- **内容渲染** — Streamdown + remark-gfm / remark-math / KaTeX
+- **主题** — shadcn/ui 默认 Neutral 配色，支持明亮、暗黑与跟随系统
 - **运行时** — Chrome MV3 Service Worker
 - **包管理** — pnpm（必须）
 
@@ -142,7 +151,12 @@ sidepanel  ──message──▶  background (Service Worker)
 
 ```bash
 pnpm build       # 必须通过 tsc 严格检查
+pnpm test:ui     # 生产构建 + 浏览器 UI 回归检查
 ```
+
+UI 检查默认使用已安装的 Chrome，模拟扩展消息与存储，并应用与扩展相同的脚本 CSP。覆盖审批、停止、重试、历史恢复、主题同步、附件标签、流式公式和窄侧边栏布局；真实 CDP 操作与模型 API 需在加载扩展后验证。可通过 `PLAYWRIGHT_CHANNEL` 选择其他已安装的浏览器通道。
+
+组件源码直接保存在仓库中。`PromptInput` 的 `onFilesAdded` 接口让扩展沿用原始 `File` 状态；网页上的元素选择框和操作标记继续由原有 CDP 代码维护。当前附件沿用既有行为，仅在聊天中展示文件名，未增加文件内容上传协议。
 
 提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 风格（`feat:` / `fix:` / `refactor:` ...）。
 

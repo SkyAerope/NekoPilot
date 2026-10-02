@@ -1,34 +1,40 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useId } from "react";
 import {
-  Box,
-  Typography,
-  TextField,
-  Stack,
-  Paper,
-  MenuItem,
-  Divider,
-  Container,
-  AppBar,
-  Toolbar,
-  IconButton,
-  Tooltip,
-  Menu,
-  ListItemIcon,
-  ListItemText,
-  Autocomplete,
-  CircularProgress,
-  FormControlLabel,
-  Switch,
-  Slider,
-} from "@mui/material";
-import SmartToyIcon from "@mui/icons-material/SmartToy";
-import LightModeIcon from "@mui/icons-material/LightMode";
-import DarkModeIcon from "@mui/icons-material/DarkMode";
-import SettingsBrightnessIcon from "@mui/icons-material/SettingsBrightness";
-import Brightness4Icon from "@mui/icons-material/Brightness4";
-import RefreshIcon from "@mui/icons-material/Refresh";
+  Bot,
+  Sun,
+  Moon,
+  Monitor,
+  Palette,
+  RefreshCw,
+  LoaderCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { ThemeMode } from "../shared/theme";
-
 interface Settings {
   apiKey: string;
   baseUrl: string;
@@ -69,20 +75,18 @@ const defaultSettings: Settings = {
   enablePromptCaching: false,
 };
 
-export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onThemeChange: (m: ThemeMode) => void }) {
+export default function Options({
+  mode,
+  onThemeChange,
+}: {
+  mode: ThemeMode;
+  onThemeChange: (m: ThemeMode) => void;
+}) {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [modelError, setModelError] = useState("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const handleMenuOpen = (e: React.MouseEvent<HTMLElement>) => setAnchorEl(e.currentTarget);
-  const handleMenuClose = () => setAnchorEl(null);
-  const handleThemeChange = (m: ThemeMode) => {
-    onThemeChange(m);
-    handleMenuClose();
-  };
 
   useEffect(() => {
     chrome.storage.local.get("settings", (data) => {
@@ -104,10 +108,13 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
     });
   }, []);
 
-  const handleProviderChange = useCallback((provider: string) => {
-    updateSettings({ provider });
-    setModelOptions([]);
-  }, [updateSettings]);
+  const handleProviderChange = useCallback(
+    (provider: string) => {
+      updateSettings({ provider });
+      setModelOptions([]);
+    },
+    [updateSettings],
+  );
 
   const handleFetchModels = useCallback(async () => {
     if (!settings.baseUrl || !settings.apiKey) {
@@ -138,321 +145,444 @@ export default function Options({ mode, onThemeChange }: { mode: ThemeMode; onTh
 
   return (
     <>
-      <AppBar position="static" color="default" elevation={1}>
-        <Toolbar sx={{ gap: 1 }}>
-          <SmartToyIcon color="primary" />
-          <Typography variant="h6" component="h1" sx={{ flexGrow: 1 }}>
-            NekoPilot 设置
-          </Typography>
-
-          <Tooltip title="主题">
-            <IconButton onClick={handleMenuOpen} color="inherit">
-              <Brightness4Icon />
-            </IconButton>
-          </Tooltip>
-          <Menu
-            anchorEl={anchorEl}
-            open={Boolean(anchorEl)}
-            onClose={handleMenuClose}
-            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-            transformOrigin={{ vertical: "top", horizontal: "right" }}
-          >
-            <MenuItem onClick={() => handleThemeChange("light")} selected={mode === "light"}>
-              <ListItemIcon><LightModeIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>明亮模式</ListItemText>
-            </MenuItem>
-            <MenuItem onClick={() => handleThemeChange("dark")} selected={mode === "dark"}>
-              <ListItemIcon><DarkModeIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>暗黑模式</ListItemText>
-            </MenuItem>
-            <Divider />
-            <MenuItem onClick={() => handleThemeChange("auto")} selected={mode === "auto"}>
-              <ListItemIcon><SettingsBrightnessIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>跟随系统</ListItemText>
-            </MenuItem>
-          </Menu>
-        </Toolbar>
-      </AppBar>
-
-      <Container maxWidth="sm" sx={{ py: 4 }}>
-        <Stack spacing={3}>
-
-          <Paper sx={{ p: 3 }}>
-          <Stack spacing={2.5}>
-            <Typography variant="subtitle2" color="text.secondary">
-              LLM 提供商
-            </Typography>
-
-            <TextField
-              select
-              label="提供商"
-              value={settings.provider}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              fullWidth
-            >
-              <MenuItem value="openai">OpenAI</MenuItem>
-              <MenuItem value="anthropic">Anthropic</MenuItem>
-            </TextField>
-
-            <Divider />
-
-            <TextField
-              label="API Key"
-              type="password"
-              value={settings.apiKey}
-              onChange={(e) => updateSettings({ apiKey: e.target.value })}
-              fullWidth
-              placeholder="sk-..."
-            />
-
-            <TextField
-              label="Base URL"
-              value={settings.baseUrl}
-              onChange={(e) => updateSettings({ baseUrl: e.target.value })}
-              fullWidth
-              helperText="末尾请带上 /v1"
-            />
-
-            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-              <Autocomplete
-                freeSolo
-                fullWidth
-                options={modelOptions}
+      <header className="sticky top-0 z-10 border-b bg-card/95 backdrop-blur">
+        <div className="mx-auto flex max-w-2xl items-center gap-3 px-6 py-4">
+          <Bot className="size-6 text-primary" />
+          <h1 className="flex-1 text-lg font-semibold">NekoPilot 设置</h1>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="切换主题">
+                <Palette />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuRadioGroup
+                value={mode}
+                onValueChange={(value) => onThemeChange(value as ThemeMode)}
+              >
+                <DropdownMenuRadioItem value="light">
+                  <Sun className="mr-2 size-4" />
+                  明亮模式
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="dark">
+                  <Moon className="mr-2 size-4" />
+                  暗黑模式
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="auto">
+                  <Monitor className="mr-2 size-4" />
+                  跟随系统
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+      <main className="mx-auto grid max-w-2xl gap-6 px-6 py-8">
+        <SettingsSection
+          title="LLM 提供商"
+          description="连接你的模型服务，修改后自动保存。"
+        >
+          <SelectField
+            label="提供商"
+            value={settings.provider}
+            onChange={handleProviderChange}
+            options={[
+              ["openai", "OpenAI"],
+              ["anthropic", "Anthropic"],
+            ]}
+          />
+          <TextField
+            label="API Key"
+            type="password"
+            value={settings.apiKey}
+            placeholder="sk-..."
+            onChange={(value) => updateSettings({ apiKey: value })}
+          />
+          <TextField
+            label="Base URL"
+            value={settings.baseUrl}
+            placeholder="https://api.openai.com/v1"
+            description="末尾请带上 /v1"
+            onChange={(value) => updateSettings({ baseUrl: value })}
+          />
+          <div className="space-y-2">
+            <Label htmlFor="model">模型</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="model"
+                list="model-options"
                 value={settings.model}
-                onInputChange={(_e, value) => updateSettings({ model: value })}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="模型"
-                    placeholder="输入或从列表选择模型"
-                    helperText={modelError || undefined}
-                    error={!!modelError}
-                  />
-                )}
-              />
-              <Tooltip title="从 API 获取模型列表">
-                <IconButton
-                  onClick={handleFetchModels}
-                  disabled={fetchingModels}
-                >
-                  {fetchingModels ? <CircularProgress size={20} /> : <RefreshIcon />}
-                </IconButton>
-              </Tooltip>
-            </Box>
-
-          {settings.provider === "anthropic" && (
-            <>
-              <Divider />
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={settings.enablePromptCaching}
-                    onChange={(e) => updateSettings({ enablePromptCaching: e.target.checked })}
-                  />
+                onChange={(event) =>
+                  updateSettings({ model: event.target.value })
                 }
-                label="启用提示缓存 (Prompt Caching)"
+                placeholder="输入或从列表选择模型"
+                aria-invalid={!!modelError}
+                aria-describedby={modelError ? "model-error" : undefined}
               />
-
+              <datalist id="model-options">
+                {modelOptions.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
+              <Button
+                variant="outline"
+                size="icon"
+                disabled={fetchingModels}
+                onClick={handleFetchModels}
+                aria-label="从 API 获取模型列表"
+                title="从 API 获取模型列表"
+              >
+                {fetchingModels ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <RefreshCw />
+                )}
+              </Button>
+            </div>
+            {modelError && (
+              <p
+                id="model-error"
+                role="alert"
+                className="text-xs text-destructive"
+              >
+                {modelError}
+              </p>
+            )}
+          </div>
+          {settings.provider === "anthropic" && (
+            <SwitchField
+              label="启用提示缓存 (Prompt Caching)"
+              checked={settings.enablePromptCaching}
+              onChange={(value) =>
+                updateSettings({ enablePromptCaching: value })
+              }
+            />
+          )}
+        </SettingsSection>
+        <SettingsSection
+          title="元素选择器"
+          description="控制页面元素引用与操作提示。"
+        >
+          <TextField
+            label="元素文本截取长度"
+            type="number"
+            min={1}
+            max={10000}
+            value={settings.elementTextLimit}
+            onChange={(value) =>
+              updateSettings({
+                elementTextLimit: Math.max(1, parseInt(value) || 128),
+              })
+            }
+          />
+          <SwitchField
+            label="Click 操作时标记坐标位置"
+            description="在 Ask 模式下，等待审批时在页面上显示点击位置标记。"
+            checked={settings.showClickMarker}
+            onChange={(value) => updateSettings({ showClickMarker: value })}
+          />
+        </SettingsSection>
+        <SettingsSection
+          title="工具行为"
+          description="配置元素引用、沙箱执行与截图上下文。"
+        >
+          <SwitchField
+            label="启用 #n 简短元素引用"
+            description="为可交互元素提供 #1 形式的短引用，执行时自动还原为 CSS 选择器；编号在一次对话内自增。"
+            checked={settings.enableShortRefs}
+            onChange={(value) => updateSettings({ enableShortRefs: value })}
+          />
+          <SwitchField
+            label="启用 execute_js 沙箱代码执行"
+            description="在独立 QuickJS 沙箱中执行纯 JavaScript 计算，无 DOM、网络或扩展 API；Ask 模式下仍需审批。"
+            checked={settings.enableCodeExecution}
+            onChange={(value) => updateSettings({ enableCodeExecution: value })}
+          />
+          {settings.enableCodeExecution && (
+            <>
+              <SliderField
+                label="execute_js 超时"
+                value={[settings.codeExecutionTimeoutMs]}
+                min={100}
+                max={5000}
+                step={100}
+                display={`${settings.codeExecutionTimeoutMs} ms`}
+                marks={[
+                  [100, "100"],
+                  [1000, "1000"],
+                  [5000, "5000"],
+                ]}
+                onChange={([value]) =>
+                  updateSettings({ codeExecutionTimeoutMs: value })
+                }
+                description="限制最长运行时间，避免死循环或长时间占用后台。"
+              />
+              <SliderField
+                label="execute_js 最大输出字符"
+                value={[settings.codeExecutionMaxOutputChars]}
+                min={1000}
+                max={20000}
+                step={500}
+                display={String(settings.codeExecutionMaxOutputChars)}
+                marks={[
+                  [1000, "1k"],
+                  [6000, "6k"],
+                  [20000, "20k"],
+                ]}
+                onChange={([value]) =>
+                  updateSettings({ codeExecutionMaxOutputChars: value })
+                }
+                description="超出限制的返回结果和 console 输出会被截断并标记 truncated。"
+              />
             </>
           )}
-          </Stack>
-        </Paper>
-
-        <Paper sx={{ p: 3 }}>
-          <Stack spacing={2.5}>
-            <Typography variant="subtitle2" color="text.secondary">
-              元素选择器
-            </Typography>
-
-            <TextField
-              label="元素文本截取长度"
-              type="number"
-              value={settings.elementTextLimit}
-              onChange={(e) =>
-                updateSettings({ elementTextLimit: Math.max(1, parseInt(e.target.value) || 128) })
-              }
-              fullWidth
-              helperText="选择页面元素时，截取元素文本的最大字符数（默认 128）"
-              slotProps={{ htmlInput: { min: 1, max: 10000 } }}
-            />
-
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={settings.showClickMarker}
-                  onChange={(e) => updateSettings({ showClickMarker: e.target.checked })}
-                />
-              }
-              label="Click 操作时标记坐标位置"
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
-              在 Ask 模式下，Click 等待审批时在页面上显示点击位置标记
-            </Typography>
-          </Stack>
-        </Paper>
-
-        <Paper sx={{ p: 3 }}>
-          <Stack spacing={2.5}>
-            <Typography variant="subtitle2" color="text.secondary">
-              工具行为
-            </Typography>
-
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={settings.enableShortRefs}
-                  onChange={(e) => updateSettings({ enableShortRefs: e.target.checked })}
-                />
-              }
-              label="启用 #n 简短元素引用"
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
-              read_page_interactive / find_element 返回的元素会附带 <code>ref: "#1"</code> 形式的短引用，模型可以直接用 <code>#1</code> 替代复杂 CSS 选择器；执行时由扩展自动还原。该编号在一次对话内自增。
-            </Typography>
-
-            <Divider />
-
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={settings.enableCodeExecution}
-                  onChange={(e) => updateSettings({ enableCodeExecution: e.target.checked })}
-                />
-              }
-              label="启用 execute_js 沙箱代码执行"
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
-              允许模型在独立 QuickJS 沙箱中执行纯 JavaScript 计算代码。该工具没有 DOM、网络或扩展 API；在 Ask 模式下仍需审批。
-            </Typography>
-
-            {settings.enableCodeExecution && (<>
-            <Divider />
-
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              execute_js 超时：{settings.codeExecutionTimeoutMs} ms
-            </Typography>
-            <Slider
-              value={settings.codeExecutionTimeoutMs}
-              onChange={(_e, v) => updateSettings({ codeExecutionTimeoutMs: v as number })}
-              min={100}
-              max={5000}
-              step={100}
-              marks={[
-                { value: 100, label: "100" },
-                { value: 1000, label: "1000" },
-                { value: 5000, label: "5000" },
-              ]}
-              valueLabelDisplay="auto"
-              sx={{ mt: -0.5 }}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-              用于限制 execute_js 的最长运行时间，避免死循环或长时间占用后台 Service Worker。
-            </Typography>
-
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              execute_js 最大输出字符：{settings.codeExecutionMaxOutputChars}
-            </Typography>
-            <Slider
-              value={settings.codeExecutionMaxOutputChars}
-              onChange={(_e, v) => updateSettings({ codeExecutionMaxOutputChars: v as number })}
-              min={1000}
-              max={20000}
-              step={500}
-              marks={[
-                { value: 1000, label: "1k" },
-                { value: 6000, label: "6k" },
-                { value: 20000, label: "20k" },
-              ]}
-              valueLabelDisplay="auto"
-              sx={{ mt: -0.5 }}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-              限制 execute_js 返回结果和 console 输出的总字符数；超出后会被截断并标记 truncated。
-            </Typography>
-            </>)}
-
-            <Divider />
-
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              截图缩放
-            </Typography>
-            <TextField
-              select
-              size="small"
-              value={settings.screenshotScaleMode}
-              onChange={(e) => updateSettings({ screenshotScaleMode: e.target.value as Settings["screenshotScaleMode"] })}
-              fullWidth
-            >
-              <MenuItem value="off">关</MenuItem>
-              <MenuItem value="claude46">1568（Claude 4.6）</MenuItem>
-              <MenuItem value="claude47">2576（Claude 4.7）</MenuItem>
-              <MenuItem value="custom">自定义</MenuItem>
-            </TextField>
-            {settings.screenshotScaleMode === "custom" && (
-              <Stack direction="row" spacing={2}>
-                <TextField
-                  label="最长边像素"
-                  type="number"
-                  size="small"
-                  value={settings.screenshotMaxLongEdge}
-                  onChange={(e) => updateSettings({ screenshotMaxLongEdge: Math.max(0, Number(e.target.value) || 0) })}
-                  helperText="0 = 无限制"
-                />
-                <TextField
-                  label="截图最大像素"
-                  type="number"
-                  size="small"
-                  value={settings.screenshotMaxPixels}
-                  onChange={(e) => updateSettings({ screenshotMaxPixels: Math.max(0, Number(e.target.value) || 0) })}
-                  helperText="0 = 无限制"
-                />
-              </Stack>
-            )}
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-              将截图缩放到模型 API 的图像限制内，避免被静默降采样导致点击坐标偏移；同时归一化高 DPI 屏幕的坐标。选“关”时保持原始截图。
-            </Typography>
-
-            <Divider />
-
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={settings.enableScreenshotPruning}
-                  onChange={(e) => updateSettings({ enableScreenshotPruning: e.target.checked })}
-                />
-              }
-              label="自动修剪历史截图"
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
-              上下文中超过 {settings.screenshotPruneTrigger} 张截图时，去除历史截图，保留最新 {settings.screenshotKeepN} 张
-            </Typography>
-            <Slider
-              value={[settings.screenshotKeepN, settings.screenshotPruneTrigger]}
-              onChange={(_e, v) => {
-                const [keepN, trigger] = v as number[];
-                updateSettings({ screenshotKeepN: keepN, screenshotPruneTrigger: trigger });
-              }}
-              disabled={!settings.enableScreenshotPruning}
-              min={1}
-              max={30}
-              step={1}
-              disableSwap
-              marks={[
-                { value: 1, label: "1" },
-                { value: 10, label: "10" },
-                { value: 20, label: "20" },
-                { value: 30, label: "30" },
-              ]}
-              valueLabelDisplay="auto"
-              sx={{ mt: -0.5 }}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-              被修剪的截图会从发送给模型的上下文中移除并替换为占位文本，可显著降低长任务的 token 消耗；侧边栏中的缩略图不受影响。
-            </Typography>
-          </Stack>
-        </Paper>
-      </Stack>
-    </Container>
+          <SelectField
+            label="截图缩放"
+            value={settings.screenshotScaleMode}
+            onChange={(value) =>
+              updateSettings({
+                screenshotScaleMode: value as Settings["screenshotScaleMode"],
+              })
+            }
+            options={[
+              ["off", "关"],
+              ["claude46", "1568（Claude 4.6）"],
+              ["claude47", "2576（Claude 4.7）"],
+              ["custom", "自定义"],
+            ]}
+          />
+          {settings.screenshotScaleMode === "custom" && (
+            <div className="grid grid-cols-2 gap-4">
+              <TextField
+                label="最长边像素"
+                type="number"
+                min={1}
+                value={settings.screenshotMaxLongEdge}
+                onChange={(value) =>
+                  updateSettings({
+                    screenshotMaxLongEdge: Math.max(1, parseInt(value) || 1568),
+                  })
+                }
+              />
+              <TextField
+                label="最大像素数"
+                type="number"
+                min={1}
+                value={settings.screenshotMaxPixels}
+                onChange={(value) =>
+                  updateSettings({
+                    screenshotMaxPixels: Math.max(
+                      1,
+                      parseInt(value) || 1150000,
+                    ),
+                  })
+                }
+              />
+            </div>
+          )}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            截图按最长边与总像素限制等比缩放，页面操作坐标保持原始视口坐标。
+          </p>
+          <SwitchField
+            label="启用截图上下文裁剪"
+            description="旧截图从模型上下文移除并替换为占位文本，侧边栏缩略图保留。"
+            checked={settings.enableScreenshotPruning}
+            onChange={(value) =>
+              updateSettings({ enableScreenshotPruning: value })
+            }
+          />
+          <SliderField
+            label="截图保留与裁剪阈值"
+            value={[settings.screenshotKeepN, settings.screenshotPruneTrigger]}
+            min={1}
+            max={30}
+            step={1}
+            minStepsBetweenThumbs={1}
+            disabled={!settings.enableScreenshotPruning}
+            display={`保留 ${settings.screenshotKeepN} 张 / 达到 ${settings.screenshotPruneTrigger} 张时裁剪`}
+            marks={[
+              [1, "1"],
+              [10, "10"],
+              [20, "20"],
+              [30, "30"],
+            ]}
+            onChange={([keepN, trigger]) =>
+              updateSettings({
+                screenshotKeepN: keepN,
+                screenshotPruneTrigger: trigger,
+              })
+            }
+          />
+        </SettingsSection>
+      </main>
     </>
+  );
+}
+
+function SettingsSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">{children}</CardContent>
+    </Card>
+  );
+}
+
+function TextField({
+  label,
+  description,
+  value,
+  onChange,
+  ...props
+}: {
+  label: string;
+  description?: string;
+  value: string | number;
+  onChange: (value: string) => void;
+} & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
+  const id = useId();
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        {...props}
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-describedby={description ? `${id}-description` : undefined}
+      />
+      {description && (
+        <p id={`${id}-description`} className="text-xs text-muted-foreground">
+          {description}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: [string, string][];
+}) {
+  const id = useId();
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([key, text]) => (
+            <SelectItem key={key} value={key}>
+              {text}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function SwitchField({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="space-y-2">
+        <Label htmlFor={id}>{label}</Label>
+        {description && (
+          <p
+            id={`${id}-description`}
+            className="text-xs leading-relaxed text-muted-foreground"
+          >
+            {description}
+          </p>
+        )}
+      </div>
+      <Switch
+        id={id}
+        checked={checked}
+        onCheckedChange={onChange}
+        aria-describedby={description ? `${id}-description` : undefined}
+      />
+    </div>
+  );
+}
+
+function SliderField({
+  label,
+  display,
+  description,
+  marks,
+  onChange,
+  ...props
+}: {
+  label: string;
+  display: string;
+  description?: string;
+  marks: [number, string][];
+  onChange: (value: number[]) => void;
+} & Omit<React.ComponentProps<typeof Slider>, "onValueChange" | "onChange">) {
+  const id = useId();
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap justify-between gap-2">
+        <Label id={id}>{label}</Label>
+        <span className="text-xs text-muted-foreground">{display}</span>
+      </div>
+      <Slider {...props} aria-labelledby={id} onValueChange={onChange} />
+      <div className="relative h-4 text-xs text-muted-foreground">
+        {marks.map(([value, text]) => (
+          <span
+            key={value}
+            className="absolute"
+            style={{
+              left: `${((value - (props.min ?? 0)) / ((props.max ?? 100) - (props.min ?? 0))) * 100}%`,
+              transform:
+                value === props.min
+                  ? undefined
+                  : value === props.max
+                    ? "translateX(-100%)"
+                    : "translateX(-50%)",
+            }}
+          >
+            {text}
+          </span>
+        ))}
+      </div>
+      {description && (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </p>
+      )}
+    </div>
   );
 }

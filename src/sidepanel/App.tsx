@@ -1,684 +1,66 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  Box,
-  IconButton,
-  Typography,
-  Paper,
-  Chip,
-  Stack,
+  Bot,
+  Settings,
+  Link,
+  Unlink,
+  MessageSquarePlus,
+  Copy,
+  Pencil,
+  RotateCcw,
+  ChevronDown,
+  FastForward,
+  Hand,
+  MousePointer2,
+  Paperclip,
+  AlertCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
   Tooltip,
-  CircularProgress,
-  AppBar,
-  Toolbar,
-  InputBase,
-  Menu,
-  MenuItem,
-  ListItemIcon,
-  ListItemText,
-  Collapse,
-  Button,
-} from "@mui/material";
-import SendIcon from "@mui/icons-material/Send";
-import StopIcon from "@mui/icons-material/Stop";
-import CloseIcon from "@mui/icons-material/Close";
-import SettingsIcon from "@mui/icons-material/Settings";
-import LinkIcon from "@mui/icons-material/Link";
-import LinkOffIcon from "@mui/icons-material/LinkOff";
-import SmartToyIcon from "@mui/icons-material/SmartToy";
-import NearMeIcon from "@mui/icons-material/NearMe";
-import AttachFileIcon from "@mui/icons-material/AttachFile";
-import AddCommentIcon from "@mui/icons-material/AddComment";
-import DoubleArrowIcon from "@mui/icons-material/DoubleArrow";
-import PanToolAltIcon from "@mui/icons-material/PanToolAlt";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
-import CameraAltOutlinedIcon from "@mui/icons-material/CameraAltOutlined";
-import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
-import TouchAppOutlinedIcon from "@mui/icons-material/TouchAppOutlined";
-import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import PsychologyAltOutlinedIcon from "@mui/icons-material/PsychologyAltOutlined";
-import EditIcon from "@mui/icons-material/Edit";
-import ReplayIcon from "@mui/icons-material/Replay";
-import katex from "katex";
-import "katex/dist/katex.min.css";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Message,
+  MessageContent,
+  MessageActions,
+  MessageAction,
+} from "@/components/ai-elements/message";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputTextarea,
+  PromptInputFooter,
+  PromptInputTools,
+  PromptInputButton,
+  PromptInputSubmit,
+} from "@/components/ai-elements/prompt-input";
+import { cn } from "@/lib/utils";
+import { MarkdownMessage } from "./markdown";
+import { IconAction, ReferenceChip, WorkingIndicator } from "./controls";
+import { StepsGroup } from "./timeline";
+import {
+  type LogEntry,
+  type PickedElement,
+  type Attachment,
+  groupLogs,
+  groupIntoTurns,
+  getToolLabel,
+  formatTokens,
+} from "./model";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
 
-// ── 类型定义 ──
-
-interface PickedElement {
-  id: number;
-  tag: string;
-  selector: string;
-  text: string;
-  rect: { x: number; y: number; w: number; h: number };
-}
-
-interface Attachment {
-  id: number;
-  name: string;
-  type: string;
-  size: number;
-  file: File;
-}
-
-interface LogEntry {
-  id: number;
-  type: "user" | "assistant" | "thinking" | "tool_call" | "error" | "pending";
-  content: string;
-  timestamp: number;
-  toolName?: string;
-  toolCallId?: string;
-  toolResult?: string;
-  toolSuccess?: boolean;
-  needsPermission?: boolean;
-  permissionResolved?: boolean;
-  screenshotData?: string;
-  screenshotMime?: string;
-  prunedFromContext?: boolean;
-  pickedElements?: PickedElement[];
-  // thinking 相关
-  thinkingDone?: boolean;
-  thinkSeconds?: number;
-}
-
 let logIdCounter = 0;
-
-/** 将含 <think>...</think> 或 <thinking>...</thinking> 的原始内容拆为思考与正文。
- *  仅当存在闭合标签时才会拆出 body；否则全部视为思考中。 */
-function splitThinkText(raw: string): { think: string; body: string } {
-  if (!raw) return { think: "", body: "" };
-  const closeMatch = raw.match(/<\/think(?:ing)?>/i);
-  if (!closeMatch) {
-    // 还在思考中：剥掉可能的开头 <think> 前缀
-    return { think: raw.replace(/^\s*<think(?:ing)?>/i, ""), body: "" };
-  }
-  const closeIdx = closeMatch.index!;
-  const closeLen = closeMatch[0].length;
-  const before = raw.slice(0, closeIdx);
-  const after = raw.slice(closeIdx + closeLen);
-  const think = before.replace(/^\s*<think(?:ing)?>/i, "").trim();
-  return { think, body: after.trim() };
-}
-
-// ── 工具图标与标签 ──
-
-function getToolIcon(name?: string) {
-  switch (name) {
-    case "screenshot":
-      return <CameraAltOutlinedIcon sx={{ fontSize: 16 }} />;
-    case "read_page_text":
-    case "read_page":
-    case "read_page_interactive":
-    case "find_element":
-    case "get_element_text":
-    case "get_element_rect":
-      return <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />;
-    case "click":
-    case "keyboard_type":
-    case "drag":
-    case "scroll":
-    case "hover":
-    case "press_key":
-      return <TouchAppOutlinedIcon sx={{ fontSize: 16 }} />;
-    default:
-      return <BuildOutlinedIcon sx={{ fontSize: 16 }} />;
-  }
-}
-
-function getToolLabel(name?: string): string {
-  const labels: Record<string, string> = {
-    execute_js: "Run JS",
-    screenshot: "Take screenshot",
-    read_page_text: "Extract page text",
-    read_page: "Read page structure",
-    read_page_interactive: "Find interactive elements",
-    click: "Click",
-    keyboard_type: "Keyboard input",
-    scroll: "Scroll page",
-    hover: "Hover",
-    handle_dialog: "Handle dialog",
-    navigate: "Navigate",
-    wait: "Wait",
-    find_element: "Find element",
-    get_element_text: "Get element text",
-    get_element_rect: "Get element position",
-    drag: "Drag",
-  };
-  return labels[name ?? ""] ?? name ?? "Tool";
-}
-
-/** 从工具的原始 args (JSON 字符串) 中提取一段简短的副标题，用于在审批时让用户看到关键参数 */
-function getToolSubtitle(name?: string, argsStr?: string): string {
-  if (!name || !argsStr) return "";
-  let args: Record<string, unknown> = {};
-  try { args = JSON.parse(argsStr); } catch { return ""; }
-  const trim = (s: string, n = 60) => (s.length > n ? s.slice(0, n) + "…" : s);
-  switch (name) {
-    case "execute_js":
-      return typeof args.description === "string" ? trim(args.description, 60) : "";
-    case "navigate":
-      return typeof args.url === "string" ? args.url : "";
-    case "keyboard_type": {
-      const text = typeof args.text === "string" ? args.text : "";
-      const key = typeof args.key === "string" ? args.key : "";
-      if (text) return `"${trim(text, 40)}"`;
-      if (key) return key;
-      return "";
-    }
-    case "click":
-      if (typeof args.selector === "string") return trim(args.selector, 50);
-      if (typeof args.x === "number" && typeof args.y === "number") return `(${args.x}, ${args.y})`;
-      return "";
-    case "find_element":
-      return typeof args.text === "string" ? `"${trim(args.text, 40)}"` : "";
-    case "wait":
-      return typeof args.ms === "number" ? `${args.ms}ms` : "";
-    case "scroll":
-      return typeof args.deltaY === "number" ? `Δy=${args.deltaY}` : "";
-    default:
-      return "";
-  }
-}
-
-function formatToolArgsMarkdown(name?: string, argsStr?: string): string {
-  if (!argsStr) return "";
-
-  let args: Record<string, unknown>;
-  try {
-    args = JSON.parse(argsStr);
-  } catch {
-    return `\`\`\`text\n${escapeMarkdownCodeFence(argsStr)}\n\`\`\``;
-  }
-
-  if (name === "execute_js") {
-    const parts: string[] = [];
-    if (typeof args.description === "string" && args.description.trim()) {
-      parts.push(`**Description**\n\n${args.description.trim()}`);
-    }
-    if (typeof args.code === "string" && args.code.trim()) {
-      parts.push(`**Code**\n\n\`\`\`js\n${escapeMarkdownCodeFence(args.code)}\n\`\`\``);
-    }
-    return parts.join("\n\n");
-  }
-
-  return `\`\`\`json\n${escapeMarkdownCodeFence(JSON.stringify(args, null, 2))}\n\`\`\``;
-}
-
-function formatToolResultMarkdown(name?: string, result?: string): string {
-  if (!result) return "";
-  if (name === "execute_js") {
-    return `\`\`\`json\n${escapeMarkdownCodeFence(result)}\n\`\`\``;
-  }
-  if (/^(\{|\[)/.test(result.trim())) {
-    return `\`\`\`json\n${escapeMarkdownCodeFence(result)}\n\`\`\``;
-  }
-  return result;
-}
-
-// ── 日志分段 ──
-
-type LogSegment =
-  | { kind: "user"; entry: LogEntry }
-  | { kind: "assistant"; entry: LogEntry }
-  | { kind: "steps"; entries: LogEntry[] };
-
-type Turn =
-  | { kind: "user"; segment: LogSegment & { kind: "user" } }
-  | { kind: "model"; segments: LogSegment[]; firstId: number };
-
-function groupLogs(logs: LogEntry[]): LogSegment[] {
-  const segments: LogSegment[] = [];
-  let currentSteps: LogEntry[] = [];
-  const flushSteps = () => {
-    if (currentSteps.length > 0) {
-      segments.push({ kind: "steps", entries: [...currentSteps] });
-      currentSteps = [];
-    }
-  };
-  for (const entry of logs) {
-    if (entry.type === "user" || entry.type === "assistant") {
-      flushSteps();
-      segments.push({ kind: entry.type, entry });
-    } else {
-      // thinking / tool_call / error 都归入 steps
-      currentSteps.push(entry);
-    }
-  }
-  flushSteps();
-  return segments;
-}
-
-function groupIntoTurns(segments: LogSegment[]): Turn[] {
-  const turns: Turn[] = [];
-  let modelSegs: LogSegment[] = [];
-  let modelFirstId = 0;
-  const flushModel = () => {
-    if (modelSegs.length > 0) {
-      turns.push({ kind: "model", segments: [...modelSegs], firstId: modelFirstId });
-      modelSegs = [];
-    }
-  };
-  for (const seg of segments) {
-    if (seg.kind === "user") {
-      flushModel();
-      turns.push({ kind: "user", segment: seg });
-    } else {
-      if (modelSegs.length === 0) {
-        modelFirstId = seg.kind === "steps" ? seg.entries[0].id : seg.entry.id;
-      }
-      modelSegs.push(seg);
-    }
-  }
-  flushModel();
-  return turns;
-}
-
-const markdownSx = {
-  wordBreak: "break-word",
-  lineHeight: 1.6,
-  fontSize: "0.875rem",
-  "& p": { m: 0, mb: 1, "&:last-child": { mb: 0 } },
-  "& ul, & ol": { my: 0.5, pl: 2.5 },
-  "& li": { mb: 0.25 },
-  "& pre": {
-    bgcolor: "background.default",
-    borderRadius: 1,
-    p: 1.5,
-    overflow: "auto",
-    fontSize: "0.78rem",
-    my: 1,
-  },
-  "& code": { fontFamily: "monospace", fontSize: "0.82em" },
-  "& :not(pre) > code": { bgcolor: "action.selected", borderRadius: 0.5, px: 0.5, py: 0.15 },
-  "& blockquote": { borderLeft: 3, borderColor: "divider", pl: 1.5, ml: 0, my: 1, opacity: 0.8 },
-  "& table": { borderCollapse: "collapse", width: "100%", my: 1, fontSize: "0.8rem" },
-  "& th, & td": { border: 1, borderColor: "divider", px: 1, py: 0.5, textAlign: "left" },
-  "& th": { bgcolor: "action.hover", fontWeight: 600 },
-  "& h1, & h2, & h3, & h4": { mt: 1.5, mb: 0.5, fontSize: "0.95rem", fontWeight: 600 },
-  "& a": { color: "primary.main" },
-  "& hr": { borderColor: "divider", my: 1.5 },
-  "& img": { maxWidth: "100%", borderRadius: 1 },
-  "& .katex-display": { overflowX: "auto", overflowY: "hidden", py: 0.5 },
-};
-
-const markdownRemarkPlugins = [remarkGfm, remarkMath];
-const markdownRehypePlugins = [rehypeKatex];
-
-function escapeMarkdownCodeFence(content: string): string {
-  return content.replace(/```/g, "``\\`");
-}
-
-function escapeMathDelimiters(raw: string): string {
-  return raw.replace(/\$/g, "\\$");
-}
-
-function appendSyntheticMathCloser(content: string, closer: "$" | "$$"): string {
-  if (closer === "$$") {
-    return content + (content.endsWith("\n") ? "" : "\n") + "$$";
-  }
-
-  let trailingBackslashes = 0;
-  for (let index = content.length - 1; index >= 0 && content[index] === "\\"; index -= 1) {
-    trailingBackslashes += 1;
-  }
-
-  if (trailingBackslashes % 2 === 1) return content + " " + closer;
-
-  return content + closer;
-}
-
-function getStreamingMarkdownPreview(content: string, streaming: boolean): string {
-  if (!streaming || !content) return content;
-
-  let insideInlineCode = false;
-  let insideFence = false;
-  let insideInlineMath = false;
-  let insideBlockMath = false;
-
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    const prev = index > 0 ? content[index - 1] : "";
-
-    if (!insideInlineCode && char === "`" && prev !== "\\") {
-      const tickStart = index;
-      while (index + 1 < content.length && content[index + 1] === "`") index += 1;
-      const tickCount = index - tickStart + 1;
-      const lineStart = tickStart === 0 || content[tickStart - 1] === "\n";
-
-      if (tickCount >= 3 && lineStart) {
-        insideFence = !insideFence;
-        continue;
-      }
-
-      if (!insideFence && tickCount === 1) {
-        insideInlineCode = !insideInlineCode;
-      }
-      continue;
-    }
-
-    if (insideFence || insideInlineCode) continue;
-
-    if (char === "\\") {
-      index += 1;
-      continue;
-    }
-
-    if (char !== "$") continue;
-
-    const dollarStart = index;
-    while (index + 1 < content.length && content[index + 1] === "$") index += 1;
-    const dollarCount = index - dollarStart + 1;
-
-    if (insideBlockMath) {
-      if (dollarCount >= 2) insideBlockMath = false;
-      continue;
-    }
-
-    if (dollarCount >= 2) {
-      insideBlockMath = true;
-      if (dollarCount % 2 === 1) insideInlineMath = !insideInlineMath;
-      continue;
-    }
-
-    insideInlineMath = !insideInlineMath;
-  }
-
-  if (insideBlockMath) return appendSyntheticMathCloser(content, "$$");
-  if (insideInlineMath) return appendSyntheticMathCloser(content, "$");
-  return content;
-}
-
-function normalizeDisplayMathBlocks(content: string): string {
-  const segments = collectMathSegments(content);
-  if (segments.length === 0) return content;
-
-  let next = "";
-  let cursor = 0;
-
-  for (const segment of segments) {
-    next += content.slice(cursor, segment.start);
-    if (!segment.displayMode) {
-      next += segment.raw;
-      cursor = segment.end;
-      continue;
-    }
-
-    const needsLeadingBreak = segment.start > 0 && content[segment.start - 1] !== "\n";
-    const needsTrailingBreak = segment.end < content.length && content[segment.end] !== "\n";
-    next += `${needsLeadingBreak ? "\n" : ""}$$\n${segment.expression.trim()}\n$$${needsTrailingBreak ? "\n" : ""}`;
-    cursor = segment.end;
-  }
-
-  next += content.slice(cursor);
-  return next;
-}
-
-function normalizeBracketMath(content: string): string {
-  const lines = content.split("\n");
-  let insideFence = false;
-
-  return lines.map((line) => {
-    const trimmed = line.trimStart();
-    if (trimmed.startsWith("```")) {
-      insideFence = !insideFence;
-      return line;
-    }
-    if (insideFence || !line.includes("[")) return line;
-
-    return line.replace(/(^|[^!])\[([^\]\n]+)\](?!\()/g, (match, prefix: string, expression: string) => {
-      const math = expression.trim();
-      if (!isLikelyBracketMath(math)) return match;
-      const before = prefix.trimEnd();
-      const isWholeLineMath = /^\s*(?:[-*+]\s*|\d+[.)]\s*)?$/.test(prefix)
-        && line.slice(line.indexOf(match) + match.length).trim() === "";
-      if (isWholeLineMath) {
-        return `${before ? `${before} ` : ""}\n$$\n${math}\n$$`;
-      }
-      return `${prefix}$${math}$`;
-    });
-  }).join("\n");
-}
-
-function isLikelyBracketMath(expression: string): boolean {
-  if (!expression || expression.length > 300) return false;
-  if (/^https?:\/\//i.test(expression)) return false;
-  return /\\[A-Za-z]+|[_^=|]|\b(?:det|sin|cos|tan|log|ln)\s*\(/.test(expression);
-}
-
-function escapeInvalidMathBlocks(content: string): string {
-  const segments = collectMathSegments(content);
-  if (segments.length === 0) return content;
-
-  let next = "";
-  let cursor = 0;
-
-  for (const segment of segments) {
-    next += content.slice(cursor, segment.start);
-    next += canRenderMathSegment(segment) ? segment.raw : escapeMathDelimiters(segment.raw);
-    cursor = segment.end;
-  }
-
-  next += content.slice(cursor);
-  return next;
-}
-
-function collectMathSegments(content: string): Array<{
-  expression: string;
-  displayMode: boolean;
-  start: number;
-  end: number;
-  raw: string;
-}> {
-  const segments: Array<{
-    expression: string;
-    displayMode: boolean;
-    start: number;
-    end: number;
-    raw: string;
-  }> = [];
-  let insideInlineCode = false;
-  let insideFence = false;
-  let inlineMathStart = -1;
-  let blockMathStart = -1;
-
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    const prev = index > 0 ? content[index - 1] : "";
-
-    if (!insideInlineCode && char === "`" && prev !== "\\") {
-      const tickStart = index;
-      while (index + 1 < content.length && content[index + 1] === "`") index += 1;
-      const tickCount = index - tickStart + 1;
-      const lineStart = tickStart === 0 || content[tickStart - 1] === "\n";
-
-      if (tickCount >= 3 && lineStart) {
-        insideFence = !insideFence;
-        continue;
-      }
-
-      if (!insideFence && tickCount === 1) {
-        insideInlineCode = !insideInlineCode;
-      }
-      continue;
-    }
-
-    if (insideFence || insideInlineCode) continue;
-
-    if (char === "\\") {
-      index += 1;
-      continue;
-    }
-
-    if (char !== "$") continue;
-
-    const dollarStart = index;
-    while (index + 1 < content.length && content[index + 1] === "$") index += 1;
-    const dollarCount = index - dollarStart + 1;
-
-    if (blockMathStart !== -1) {
-      if (dollarCount >= 2) {
-        const start = blockMathStart - 2;
-        const end = dollarStart + dollarCount;
-        segments.push({
-          expression: content.slice(blockMathStart, dollarStart),
-          displayMode: true,
-          start,
-          end,
-          raw: content.slice(start, end),
-        });
-        blockMathStart = -1;
-      }
-      continue;
-    }
-
-    if (inlineMathStart !== -1) {
-      if (dollarCount === 1) {
-        const start = inlineMathStart - 1;
-        const end = dollarStart + 1;
-        segments.push({
-          expression: content.slice(inlineMathStart, dollarStart),
-          displayMode: false,
-          start,
-          end,
-          raw: content.slice(start, end),
-        });
-        inlineMathStart = -1;
-        continue;
-      }
-
-      inlineMathStart = -1;
-    }
-
-    if (dollarCount >= 2) {
-      blockMathStart = dollarStart + 2;
-      continue;
-    }
-
-    inlineMathStart = dollarStart + 1;
-  }
-
-  return segments;
-}
-
-function canRenderMathSegment(segment: {
-  expression: string;
-  displayMode: boolean;
-}): boolean {
-  const trimmed = segment.expression.trimEnd();
-  if (!trimmed) return false;
-
-  let braceDepth = 0;
-  let escaped = false;
-  for (const char of trimmed) {
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "{") braceDepth += 1;
-    if (char === "}" && braceDepth > 0) braceDepth -= 1;
-  }
-
-  if (escaped || braceDepth > 0) return false;
-  if (/[\\_^]$/.test(trimmed)) return false;
-  if (/\\[A-Za-z]*$/.test(trimmed)) return false;
-
-  try {
-    katex.renderToString(segment.expression, {
-      displayMode: segment.displayMode,
-      throwOnError: true,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getStableMathPreview(
-  content: string,
-  previousSegments: Array<{ raw: string; displayMode: boolean }>,
-): {
-  renderContent: string;
-  nextSegments: Array<{ raw: string; displayMode: boolean }>;
-} {
-  const segments = collectMathSegments(content);
-  if (segments.length === 0) {
-    return { renderContent: content, nextSegments: [] };
-  }
-
-  let renderContent = "";
-  let cursor = 0;
-  const nextSegments: Array<{ raw: string; displayMode: boolean }> = [];
-
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-    renderContent += content.slice(cursor, segment.start);
-
-    if (canRenderMathSegment(segment)) {
-      renderContent += segment.raw;
-      nextSegments.push({ raw: segment.raw, displayMode: segment.displayMode });
-    } else {
-      const cached = previousSegments[index];
-      if (cached && cached.displayMode === segment.displayMode) {
-        renderContent += cached.raw;
-        nextSegments.push(cached);
-      }
-    }
-
-    cursor = segment.end;
-  }
-
-  renderContent += content.slice(cursor);
-  return { renderContent, nextSegments };
-}
-
-function MarkdownMessage({
-  content,
-  streaming,
-}: {
-  content: string;
-  streaming: boolean;
-}) {
-  const lastGoodSegmentsRef = useRef<Array<{ raw: string; displayMode: boolean }>>([]);
-  const renderContent = useMemo(() => {
-    const previewContent = getStreamingMarkdownPreview(content, streaming);
-    const bracketNormalizedContent = normalizeBracketMath(previewContent);
-    const normalizedContent = normalizeDisplayMathBlocks(bracketNormalizedContent);
-    const sanitizedContent = escapeInvalidMathBlocks(normalizedContent);
-    const stablePreview = getStableMathPreview(sanitizedContent, lastGoodSegmentsRef.current);
-    lastGoodSegmentsRef.current = stablePreview.nextSegments;
-    return stablePreview.renderContent;
-  }, [content, streaming]);
-
-  return (
-    <ReactMarkdown
-      remarkPlugins={markdownRemarkPlugins}
-      rehypePlugins={markdownRehypePlugins}
-    >
-      {renderContent}
-    </ReactMarkdown>
-  );
-}
-
-// ── 主组件 ──
-
-/** 紧凑格式化 token 数：1234 → "1.2k"，1234567 → "1.2M"。 */
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, "") + "k";
-  return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
-}
 
 export default function App() {
   const [input, setInput] = useState("");
@@ -686,16 +68,21 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [attached, setAttached] = useState(false);
   const [autoMode, setAutoMode] = useState(false);
-  const [modeMenuAnchor, setModeMenuAnchor] = useState<null | HTMLElement>(null);
   const [picking, setPicking] = useState(false);
-  const [pickHover, setPickHover] = useState<{ tag: string; text: string } | null>(null);
+  const [pickHover, setPickHover] = useState<{
+    tag: string;
+    text: string;
+  } | null>(null);
   const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [elementTextLimit, setElementTextLimit] = useState(128);
   /** 最近一次 LLM 响应的 prompt token 数——代表"当前上下文占用"。
    *  每轮请求都会刷新，UI 把它显示在工具栏让用户知道还剩多少预算。 */
   const [promptTokens, setPromptTokens] = useState<number | null>(null);
-  const [cacheInfo, setCacheInfo] = useState<{ creation: number; read: number } | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<{
+    creation: number;
+    read: number;
+  } | null>(null);
   const logsBoxRef = useRef<HTMLDivElement>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -708,21 +95,29 @@ export default function App() {
 
   // 加载持久化设置 + 历史对话
   useEffect(() => {
-    chrome.storage.local.get(["autoMode", "settings", "chatLogs", "chatMeta"], (data) => {
-      if (data.autoMode !== undefined) setAutoMode(data.autoMode);
-      if (data.settings?.elementTextLimit != null) setElementTextLimit(data.settings.elementTextLimit);
-      if (Array.isArray(data.chatLogs) && data.chatLogs.length > 0) {
-        setLogs(data.chatLogs as LogEntry[]);
-        // 恢复 logIdCounter，避免新条目 id 与已恢复条目冲突
-        const maxId = (data.chatLogs as LogEntry[]).reduce((m, l) => Math.max(m, l.id), 0);
-        if (maxId > logIdCounter) logIdCounter = maxId;
-      }
-      if (data.chatMeta) {
-        if (typeof data.chatMeta.promptTokens === "number") setPromptTokens(data.chatMeta.promptTokens);
-        if (data.chatMeta.cacheInfo) setCacheInfo(data.chatMeta.cacheInfo);
-      }
-      logsLoadedRef.current = true;
-    });
+    chrome.storage.local.get(
+      ["autoMode", "settings", "chatLogs", "chatMeta"],
+      (data) => {
+        if (data.autoMode !== undefined) setAutoMode(data.autoMode);
+        if (data.settings?.elementTextLimit != null)
+          setElementTextLimit(data.settings.elementTextLimit);
+        if (Array.isArray(data.chatLogs) && data.chatLogs.length > 0) {
+          setLogs(data.chatLogs as LogEntry[]);
+          // 恢复 logIdCounter，避免新条目 id 与已恢复条目冲突
+          const maxId = (data.chatLogs as LogEntry[]).reduce(
+            (m, l) => Math.max(m, l.id),
+            0,
+          );
+          if (maxId > logIdCounter) logIdCounter = maxId;
+        }
+        if (data.chatMeta) {
+          if (typeof data.chatMeta.promptTokens === "number")
+            setPromptTokens(data.chatMeta.promptTokens);
+          if (data.chatMeta.cacheInfo) setCacheInfo(data.chatMeta.cacheInfo);
+        }
+        logsLoadedRef.current = true;
+      },
+    );
   }, []);
 
   // 持久化对话记录（防抖），让关闭/重开侧边栏后仍能保留历史
@@ -739,12 +134,19 @@ export default function App() {
 
   // 轮询元素选择器 hover 信息
   useEffect(() => {
-    if (!picking) { setPickHover(null); return; }
+    if (!picking) {
+      setPickHover(null);
+      return;
+    }
     const timer = setInterval(async () => {
       try {
-        const res = await sendMessage<{ hover: { tag: string; text: string } | null }>("pick:hover");
+        const res = await sendMessage<{
+          hover: { tag: string; text: string } | null;
+        }>("pick:hover");
         setPickHover(res.hover);
-      } catch { setPickHover(null); }
+      } catch {
+        setPickHover(null);
+      }
     }, 300);
     return () => clearInterval(timer);
   }, [picking]);
@@ -763,23 +165,35 @@ export default function App() {
       if (event.type === "tool_call_streaming") {
         setLogs((prev) => {
           if (prev[prev.length - 1]?.type === "pending") return prev;
-          return [...prev, {
-            id: ++logIdCounter,
-            type: "pending",
-            content: typeof event.data === "string" ? event.data : "正在生成工具调用…",
-            timestamp: Date.now(),
-          }];
+          return [
+            ...prev,
+            {
+              id: ++logIdCounter,
+              type: "pending",
+              content:
+                typeof event.data === "string"
+                  ? event.data
+                  : "正在生成工具调用…",
+              timestamp: Date.now(),
+            },
+          ];
         });
         return;
       }
 
       if (event.type === "message") {
-        setLogs((prev) => [...prev.filter((log) => log.type !== "pending"), {
-          id: ++logIdCounter,
-          type: "assistant",
-          content: typeof event.data === "string" ? event.data : JSON.stringify(event.data),
-          timestamp: Date.now(),
-        }]);
+        setLogs((prev) => [
+          ...prev.filter((log) => log.type !== "pending"),
+          {
+            id: ++logIdCounter,
+            type: "assistant",
+            content:
+              typeof event.data === "string"
+                ? event.data
+                : JSON.stringify(event.data),
+            timestamp: Date.now(),
+          },
+        ]);
         return;
       }
 
@@ -791,7 +205,11 @@ export default function App() {
           const lastThink = prev.findLastIndex((l) => l.type === "thinking");
           const lastAsst = prev.findLastIndex((l) => l.type === "assistant");
           // 情况 A：当前正处在未完成的 thinking 中（thinking 在 assistant 之后）
-          if (lastThink !== -1 && lastThink > lastAsst && !prev[lastThink].thinkingDone) {
+          if (
+            lastThink !== -1 &&
+            lastThink > lastAsst &&
+            !prev[lastThink].thinkingDone
+          ) {
             const old = prev[lastThink];
             const nextContent = old.content + delta;
             const closeMatch = nextContent.match(CLOSE_TAG);
@@ -810,7 +228,10 @@ export default function App() {
               ...old,
               content: thinkPart,
               thinkingDone: true,
-              thinkSeconds: Math.max(1, Math.round((Date.now() - old.timestamp) / 1000)),
+              thinkSeconds: Math.max(
+                1,
+                Math.round((Date.now() - old.timestamp) / 1000),
+              ),
             };
             if (tailPart) {
               updated.push({
@@ -843,7 +264,10 @@ export default function App() {
               type: "thinking",
               content: thinkPart,
               thinkingDone: true,
-              thinkSeconds: Math.max(1, Math.round((now - old.timestamp) / 1000)),
+              thinkSeconds: Math.max(
+                1,
+                Math.round((now - old.timestamp) / 1000),
+              ),
             };
             if (tailPart) {
               updated.push({
@@ -885,80 +309,110 @@ export default function App() {
       }
 
       if (event.type === "tool_call") {
-        const data = event.data as { name: string; args: string; id: string; needsPermission?: boolean };
-        setLogs((prev) => [...prev.filter((log) => log.type !== "pending"), {
-          id: ++logIdCounter,
-          type: "tool_call",
-          content: data.args,
-          toolName: data.name,
-          toolCallId: data.id,
-          needsPermission: data.needsPermission,
-          timestamp: Date.now(),
-        }]);
+        const data = event.data as {
+          name: string;
+          args: string;
+          id: string;
+          needsPermission?: boolean;
+        };
+        setLogs((prev) => [
+          ...prev.filter((log) => log.type !== "pending"),
+          {
+            id: ++logIdCounter,
+            type: "tool_call",
+            content: data.args,
+            toolName: data.name,
+            toolCallId: data.id,
+            needsPermission: data.needsPermission,
+            timestamp: Date.now(),
+          },
+        ]);
         return;
       }
 
       if (event.type === "tool_result") {
-        const data = event.data as { name: string; result: { success: boolean; data?: unknown; error?: string }; id: string };
-        setLogs((prev) => prev.map((log) => {
-          if (log.type === "tool_call" && log.toolCallId === data.id) {
-            const resultData = data.result.data ?? data.result.error;
-            // 字符串结果直接保留（避免 JSON.stringify 把 \n 转义为字面量）
-            const formatted = resultData === undefined
-              ? "done"
-              : typeof resultData === "string"
-                ? resultData
-                : JSON.stringify(resultData, null, 2);
-            const shotInfo = (data.name === "screenshot" && data.result.success)
-              ? (typeof data.result.data === "string"
-                  ? { data: data.result.data as string, mime: "image/png" }
-                  : (data.result.data as { data: string; mime: string }))
-              : null;
-            // 工具 runtime 没抛错并不代表语义上成功：例如 find_element 返回
-            // "no_results: ..." 字符串、或对象内 status === "no_results" / "error"。
-            // 这里识别这些"软失败"，让 UI 显示叉叉。
-            let semanticSuccess = data.result.success;
-            if (semanticSuccess) {
-              const d = data.result.data;
-              if (typeof d === "string") {
-                if (/^(no_results|not_found|error)\b/i.test(d.trim())) semanticSuccess = false;
-              } else if (d && typeof d === "object") {
-                const status = (d as { status?: unknown }).status;
-                if (typeof status === "string" && /^(no_results|not_found|error|failed)$/i.test(status)) {
-                  semanticSuccess = false;
+        const data = event.data as {
+          name: string;
+          result: { success: boolean; data?: unknown; error?: string };
+          id: string;
+        };
+        setLogs((prev) =>
+          prev.map((log) => {
+            if (log.type === "tool_call" && log.toolCallId === data.id) {
+              const resultData = data.result.data ?? data.result.error;
+              // 字符串结果直接保留（避免 JSON.stringify 把 \n 转义为字面量）
+              const formatted =
+                resultData === undefined
+                  ? "done"
+                  : typeof resultData === "string"
+                    ? resultData
+                    : JSON.stringify(resultData, null, 2);
+              const shotInfo =
+                data.name === "screenshot" && data.result.success
+                  ? typeof data.result.data === "string"
+                    ? { data: data.result.data as string, mime: "image/png" }
+                    : (data.result.data as { data: string; mime: string })
+                  : null;
+              // 工具 runtime 没抛错并不代表语义上成功：例如 find_element 返回
+              // "no_results: ..." 字符串、或对象内 status === "no_results" / "error"。
+              // 这里识别这些"软失败"，让 UI 显示叉叉。
+              let semanticSuccess = data.result.success;
+              if (semanticSuccess) {
+                const d = data.result.data;
+                if (typeof d === "string") {
+                  if (/^(no_results|not_found|error)\b/i.test(d.trim()))
+                    semanticSuccess = false;
+                } else if (d && typeof d === "object") {
+                  const status = (d as { status?: unknown }).status;
+                  if (
+                    typeof status === "string" &&
+                    /^(no_results|not_found|error|failed)$/i.test(status)
+                  ) {
+                    semanticSuccess = false;
+                  }
                 }
               }
+              return {
+                ...log,
+                toolResult: formatted,
+                toolSuccess: semanticSuccess,
+                screenshotData: shotInfo?.data,
+                screenshotMime: shotInfo?.mime,
+              };
             }
-            return {
-              ...log,
-              toolResult: formatted,
-              toolSuccess: semanticSuccess,
-              screenshotData: shotInfo?.data,
-              screenshotMime: shotInfo?.mime,
-            };
-          }
-          return log;
-        }));
+            return log;
+          }),
+        );
         return;
       }
 
       if (event.type === "screenshots_pruned") {
         const ids = (event.data as { ids: string[] }).ids ?? [];
-        setLogs((prev) => prev.map((log) =>
-          log.toolCallId && ids.includes(log.toolCallId) ? { ...log, prunedFromContext: true } : log
-        ));
+        setLogs((prev) =>
+          prev.map((log) =>
+            log.toolCallId && ids.includes(log.toolCallId)
+              ? { ...log, prunedFromContext: true }
+              : log,
+          ),
+        );
         return;
       }
 
       if (event.type === "thinking") {
-        const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
-        setLogs((prev) => [...prev, {
-          id: ++logIdCounter,
-          type: "thinking",
-          content: text,
-          timestamp: Date.now(),
-          thinkingDone: false,
-        }]);
+        const text =
+          typeof event.data === "string"
+            ? event.data
+            : JSON.stringify(event.data);
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: ++logIdCounter,
+            type: "thinking",
+            content: text,
+            timestamp: Date.now(),
+            thinkingDone: false,
+          },
+        ]);
         return;
       }
 
@@ -975,9 +429,17 @@ export default function App() {
           let thinkSeconds = old.thinkSeconds;
           if (!thinkingDone && /<\/think>/i.test(nextContent)) {
             thinkingDone = true;
-            thinkSeconds = Math.max(1, Math.round((Date.now() - old.timestamp) / 1000));
+            thinkSeconds = Math.max(
+              1,
+              Math.round((Date.now() - old.timestamp) / 1000),
+            );
           }
-          updated[lastIdx] = { ...old, content: nextContent, thinkingDone, thinkSeconds };
+          updated[lastIdx] = {
+            ...old,
+            content: nextContent,
+            thinkingDone,
+            thinkSeconds,
+          };
           return updated;
         });
         return;
@@ -995,7 +457,9 @@ export default function App() {
           updated[lastThink] = {
             ...old,
             thinkingDone: true,
-            thinkSeconds: old.thinkSeconds ?? Math.max(1, Math.round((Date.now() - old.timestamp) / 1000)),
+            thinkSeconds:
+              old.thinkSeconds ??
+              Math.max(1, Math.round((Date.now() - old.timestamp) / 1000)),
           };
           return updated;
         });
@@ -1003,16 +467,29 @@ export default function App() {
       }
 
       if (event.type === "usage") {
-        const u = event.data as { promptTokens?: number; totalTokens?: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number } | undefined;
+        const u = event.data as
+          | {
+              promptTokens?: number;
+              totalTokens?: number;
+              cacheCreationInputTokens?: number;
+              cacheReadInputTokens?: number;
+            }
+          | undefined;
         // prompt_tokens 反映上一轮请求的上下文大小，最能代表"当前占了多少上下文"。
         // 没有时兜底用 totalTokens。
-        const n = typeof u?.promptTokens === "number" && u.promptTokens > 0
-          ? u.promptTokens
-          : typeof u?.totalTokens === "number" ? u.totalTokens : null;
+        const n =
+          typeof u?.promptTokens === "number" && u.promptTokens > 0
+            ? u.promptTokens
+            : typeof u?.totalTokens === "number"
+              ? u.totalTokens
+              : null;
         if (n !== null) setPromptTokens(n);
         // 缓存命中信息
         if (u?.cacheCreationInputTokens || u?.cacheReadInputTokens) {
-          setCacheInfo({ creation: u.cacheCreationInputTokens ?? 0, read: u.cacheReadInputTokens ?? 0 });
+          setCacheInfo({
+            creation: u.cacheCreationInputTokens ?? 0,
+            read: u.cacheReadInputTokens ?? 0,
+          });
         } else {
           setCacheInfo(null);
         }
@@ -1020,12 +497,18 @@ export default function App() {
       }
 
       if (event.type === "error") {
-        setLogs((prev) => [...prev, {
-          id: ++logIdCounter,
-          type: "error",
-          content: typeof event.data === "string" ? event.data : JSON.stringify(event.data),
-          timestamp: Date.now(),
-        }]);
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: ++logIdCounter,
+            type: "error",
+            content:
+              typeof event.data === "string"
+                ? event.data
+                : JSON.stringify(event.data),
+            timestamp: Date.now(),
+          },
+        ]);
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -1052,7 +535,7 @@ export default function App() {
   // 检查连接状态
   useEffect(() => {
     sendMessage<{ attached: boolean }>("cdp:status").then((res) =>
-      setAttached(res.attached)
+      setAttached(res.attached),
     );
   }, []);
 
@@ -1060,7 +543,9 @@ export default function App() {
     setAutoMode(value);
     chrome.storage.local.set({ autoMode: value });
     // 实时同步给正在运行的 agent
-    sendMessage("agent:setMode", { mode: value ? "auto" : "ask" }).catch(() => {});
+    sendMessage("agent:setMode", { mode: value ? "auto" : "ask" }).catch(
+      () => {},
+    );
   }, []);
 
   const handleAttach = useCallback(async () => {
@@ -1075,10 +560,13 @@ export default function App() {
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || running) return;
+    if ((!text && pickedElements.length === 0) || running) return;
 
     const elementContext = pickedElements
-      .map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
+      .map(
+        (el) =>
+          `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`,
+      )
       .join("\n");
     const attachmentNames = attachments.map((a) => a.name);
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
@@ -1091,9 +579,14 @@ export default function App() {
       {
         id: ++logIdCounter,
         type: "user",
-        content: text + (attachmentNames.length ? `\n[附件: ${attachmentNames.join(", ")}]` : ""),
+        content:
+          text +
+          (attachmentNames.length
+            ? `\n[附件: ${attachmentNames.join(", ")}]`
+            : ""),
         timestamp: Date.now(),
-        pickedElements: pickedElements.length > 0 ? [...pickedElements] : undefined,
+        pickedElements:
+          pickedElements.length > 0 ? [...pickedElements] : undefined,
       },
     ]);
 
@@ -1119,7 +612,12 @@ export default function App() {
     if (!settings?.apiKey) {
       setLogs((prev) => [
         ...prev,
-        { id: ++logIdCounter, type: "error", content: "请先在设置页面配置 API Key", timestamp: Date.now() },
+        {
+          id: ++logIdCounter,
+          type: "error",
+          content: "请先在设置页面配置 API Key",
+          timestamp: Date.now(),
+        },
       ]);
       return;
     }
@@ -1136,22 +634,52 @@ export default function App() {
           showClickMarker: settings.showClickMarker !== false,
           provider: settings.provider === "anthropic" ? "anthropic" : "openai",
           enableShortRefs: settings.enableShortRefs !== false,
-          screenshotScaleMode: (["off", "claude46", "claude47", "custom"].includes(settings.screenshotScaleMode ?? "") ? settings.screenshotScaleMode : "claude46") as "off" | "claude46" | "claude47" | "custom",
-          screenshotMaxLongEdge: typeof settings.screenshotMaxLongEdge === "number" ? settings.screenshotMaxLongEdge : 1568,
-          screenshotMaxPixels: typeof settings.screenshotMaxPixels === "number" ? settings.screenshotMaxPixels : 1150000,
+          screenshotScaleMode: ([
+            "off",
+            "claude46",
+            "claude47",
+            "custom",
+          ].includes(settings.screenshotScaleMode ?? "")
+            ? settings.screenshotScaleMode
+            : "claude46") as "off" | "claude46" | "claude47" | "custom",
+          screenshotMaxLongEdge:
+            typeof settings.screenshotMaxLongEdge === "number"
+              ? settings.screenshotMaxLongEdge
+              : 1568,
+          screenshotMaxPixels:
+            typeof settings.screenshotMaxPixels === "number"
+              ? settings.screenshotMaxPixels
+              : 1150000,
           enableScreenshotPruning: settings.enableScreenshotPruning !== false,
-          screenshotKeepN: typeof settings.screenshotKeepN === "number" ? settings.screenshotKeepN : 3,
-          screenshotPruneTrigger: typeof settings.screenshotPruneTrigger === "number" ? settings.screenshotPruneTrigger : 12,
+          screenshotKeepN:
+            typeof settings.screenshotKeepN === "number"
+              ? settings.screenshotKeepN
+              : 3,
+          screenshotPruneTrigger:
+            typeof settings.screenshotPruneTrigger === "number"
+              ? settings.screenshotPruneTrigger
+              : 12,
           enableCodeExecution: settings.enableCodeExecution !== false,
-          codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
-          codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
+          codeExecutionTimeoutMs:
+            typeof settings.codeExecutionTimeoutMs === "number"
+              ? settings.codeExecutionTimeoutMs
+              : 1000,
+          codeExecutionMaxOutputChars:
+            typeof settings.codeExecutionMaxOutputChars === "number"
+              ? settings.codeExecutionMaxOutputChars
+              : 6000,
           enablePromptCaching: settings.enablePromptCaching === true,
         },
       });
     } catch (err) {
       setLogs((prev) => [
         ...prev,
-        { id: ++logIdCounter, type: "error", content: String(err), timestamp: Date.now() },
+        {
+          id: ++logIdCounter,
+          type: "error",
+          content: String(err),
+          timestamp: Date.now(),
+        },
       ]);
       setRunning(false);
     }
@@ -1161,16 +689,6 @@ export default function App() {
     await sendMessage("agent:stop");
     setRunning(false);
   }, []);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend]
-  );
 
   const handleClearChat = useCallback(() => {
     setLogs([]);
@@ -1182,26 +700,38 @@ export default function App() {
 
   const handleApprove = useCallback((toolCallId: string) => {
     sendMessage("agent:approve");
-    setLogs((prev) => prev.map((log) =>
-      log.toolCallId === toolCallId ? { ...log, permissionResolved: true } : log
-    ));
+    setLogs((prev) =>
+      prev.map((log) =>
+        log.toolCallId === toolCallId
+          ? { ...log, permissionResolved: true }
+          : log,
+      ),
+    );
   }, []);
 
   const handleReject = useCallback((toolCallId: string) => {
     sendMessage("agent:reject");
-    setLogs((prev) => prev.map((log) =>
-      log.toolCallId === toolCallId ? { ...log, permissionResolved: true } : log
-    ));
+    setLogs((prev) =>
+      prev.map((log) =>
+        log.toolCallId === toolCallId
+          ? { ...log, permissionResolved: true }
+          : log,
+      ),
+    );
   }, []);
 
   const handlePickElement = useCallback(async () => {
     if (picking) return;
     setPicking(true);
     try {
-      const result = await sendMessage<{ element: Record<string, unknown> | null; timeout?: boolean }>("pick:start");
+      const result = await sendMessage<{
+        element: Record<string, unknown> | null;
+        timeout?: boolean;
+      }>("pick:start");
       if (result.element) {
         const el = result.element;
-        const rect = el.rect as { x: number; y: number; w: number; h: number } | undefined;
+        const rect = el.rect as
+          { x: number; y: number; w: number; h: number } | undefined;
         setPickedElements((prev) => [
           ...prev,
           {
@@ -1215,13 +745,23 @@ export default function App() {
       } else if (result.timeout) {
         setLogs((prev) => [
           ...prev,
-          { id: ++logIdCounter, type: "error", content: "选择元素超时", timestamp: Date.now() },
+          {
+            id: ++logIdCounter,
+            type: "error",
+            content: "选择元素超时",
+            timestamp: Date.now(),
+          },
         ]);
       }
     } catch (err) {
       setLogs((prev) => [
         ...prev,
-        { id: ++logIdCounter, type: "error", content: "选择元素失败: " + String(err), timestamp: Date.now() },
+        {
+          id: ++logIdCounter,
+          type: "error",
+          content: "选择元素失败: " + String(err),
+          timestamp: Date.now(),
+        },
       ]);
     } finally {
       setPicking(false);
@@ -1240,105 +780,191 @@ export default function App() {
     navigator.clipboard.writeText(text);
   }, []);
 
-  const handleEditMessage = useCallback(async (entryId: number) => {
-    if (running) return;
-    const entry = logs.find((l) => l.id === entryId);
-    if (!entry || entry.type !== "user") return;
-    const text = entry.content.replace(/\n\[附件:.*?\]$/s, "");
-    setInput(text);
-    if (entry.pickedElements) setPickedElements([...entry.pickedElements]);
-    await sendMessage("agent:reset");
-    setLogs((prev) => {
-      const idx = prev.findIndex((l) => l.id === entryId);
-      return idx >= 0 ? prev.slice(0, idx) : prev;
-    });
-  }, [logs, running]);
-
-  const handleRetry = useCallback(async (entryId: number, isUser: boolean) => {
-    if (running) return;
-    const idx = logs.findIndex((l) => l.id === entryId);
-    if (idx < 0) return;
-    // 定位目标 user entry 及其在 user 序列中的索引
-    let userIdx = -1;
-    let userEntry: LogEntry | undefined;
-    if (isUser) {
-      userIdx = idx;
-      userEntry = logs[idx];
-    } else {
-      for (let i = idx - 1; i >= 0; i--) {
-        if (logs[i].type === "user") { userIdx = i; userEntry = logs[i]; break; }
-      }
-    }
-    if (!userEntry || userIdx < 0) return;
-    // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
-    let turnIndex = 0;
-    for (let i = 0; i < userIdx; i++) {
-      if (logs[i].type === "user") turnIndex++;
-    }
-    // 后端截断到该 user 消息之前（不含），保留先前对话
-    await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
-    // 前端 logs 也截断到该 user 消息之前
-    setLogs(logs.slice(0, userIdx));
-    const text = userEntry.content.replace(/\n\[附件:.*?\]$/s, "");
-    const elementContext = userEntry.pickedElements
-      ?.map((el) => `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`)
-      .join("\n") ?? "";
-    const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-    const settings = await sendMessage<{ apiKey?: string; baseUrl?: string; model?: string; showClickMarker?: boolean; provider?: string; enableShortRefs?: boolean; screenshotScaleMode?: string; screenshotMaxLongEdge?: number; screenshotMaxPixels?: number; enableScreenshotPruning?: boolean; screenshotKeepN?: number; screenshotPruneTrigger?: number; enableCodeExecution?: boolean; codeExecutionTimeoutMs?: number; codeExecutionMaxOutputChars?: number; enablePromptCaching?: boolean }>("settings:get");
-    if (!settings?.apiKey) {
-      setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: "请先配置 API Key", timestamp: Date.now() }]);
-      return;
-    }
-    // 重新追加用户消息到 logs（保持原始内容/附件信息便于再次重试）
-    const replayedEntry: LogEntry = { ...userEntry, id: ++logIdCounter, timestamp: Date.now() };
-    setLogs((prev) => [...prev, replayedEntry]);
-    setRunning(true);
-    try {
-      await sendMessage("agent:start", {
-        userMessage: fullMessage,
-        config: {
-          apiKey: settings.apiKey,
-          baseUrl: settings.baseUrl || "https://api.openai.com/v1",
-          model: settings.model || "gpt-4o",
-          permissionMode: autoMode ? "auto" : "ask",
-          showClickMarker: settings.showClickMarker !== false,
-          provider: settings.provider === "anthropic" ? "anthropic" : "openai",
-          enableShortRefs: settings.enableShortRefs !== false,
-          screenshotScaleMode: (["off", "claude46", "claude47", "custom"].includes(settings.screenshotScaleMode ?? "") ? settings.screenshotScaleMode : "claude46") as "off" | "claude46" | "claude47" | "custom",
-          screenshotMaxLongEdge: typeof settings.screenshotMaxLongEdge === "number" ? settings.screenshotMaxLongEdge : 1568,
-          screenshotMaxPixels: typeof settings.screenshotMaxPixels === "number" ? settings.screenshotMaxPixels : 1150000,
-          enableScreenshotPruning: settings.enableScreenshotPruning !== false,
-          screenshotKeepN: typeof settings.screenshotKeepN === "number" ? settings.screenshotKeepN : 3,
-          screenshotPruneTrigger: typeof settings.screenshotPruneTrigger === "number" ? settings.screenshotPruneTrigger : 12,
-          enableCodeExecution: settings.enableCodeExecution !== false,
-          codeExecutionTimeoutMs: typeof settings.codeExecutionTimeoutMs === "number" ? settings.codeExecutionTimeoutMs : 1000,
-          codeExecutionMaxOutputChars: typeof settings.codeExecutionMaxOutputChars === "number" ? settings.codeExecutionMaxOutputChars : 6000,
-          enablePromptCaching: settings.enablePromptCaching === true,
-        },
+  const handleEditMessage = useCallback(
+    async (entryId: number) => {
+      if (running) return;
+      const entry = logs.find((l) => l.id === entryId);
+      if (!entry || entry.type !== "user") return;
+      const text = entry.content.replace(/\n\[附件:.*?\]$/s, "");
+      setInput(text);
+      if (entry.pickedElements) setPickedElements([...entry.pickedElements]);
+      await sendMessage("agent:reset");
+      setLogs((prev) => {
+        const idx = prev.findIndex((l) => l.id === entryId);
+        return idx >= 0 ? prev.slice(0, idx) : prev;
       });
-    } catch (err) {
-      setLogs((prev) => [...prev, { id: ++logIdCounter, type: "error" as const, content: String(err), timestamp: Date.now() }]);
-      setRunning(false);
-    }
-  }, [logs, running, autoMode]);
+    },
+    [logs, running],
+  );
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    const newAttachments: Attachment[] = Array.from(files).map((f) => ({
+  const handleRetry = useCallback(
+    async (entryId: number, isUser: boolean) => {
+      if (running) return;
+      const idx = logs.findIndex((l) => l.id === entryId);
+      if (idx < 0) return;
+      // 定位目标 user entry 及其在 user 序列中的索引
+      let userIdx = -1;
+      let userEntry: LogEntry | undefined;
+      if (isUser) {
+        userIdx = idx;
+        userEntry = logs[idx];
+      } else {
+        for (let i = idx - 1; i >= 0; i--) {
+          if (logs[i].type === "user") {
+            userIdx = i;
+            userEntry = logs[i];
+            break;
+          }
+        }
+      }
+      if (!userEntry || userIdx < 0) return;
+      // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
+      let turnIndex = 0;
+      for (let i = 0; i < userIdx; i++) {
+        if (logs[i].type === "user") turnIndex++;
+      }
+      // 后端截断到该 user 消息之前（不含），保留先前对话
+      await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
+      // 前端 logs 也截断到该 user 消息之前
+      setLogs(logs.slice(0, userIdx));
+      const text = userEntry.content.replace(/\n\[附件:.*?\]$/s, "");
+      const elementContext =
+        userEntry.pickedElements
+          ?.map(
+            (el) =>
+              `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`,
+          )
+          .join("\n") ?? "";
+      const fullMessage = [text, elementContext].filter(Boolean).join("\n");
+      const settings = await sendMessage<{
+        apiKey?: string;
+        baseUrl?: string;
+        model?: string;
+        showClickMarker?: boolean;
+        provider?: string;
+        enableShortRefs?: boolean;
+        screenshotScaleMode?: string;
+        screenshotMaxLongEdge?: number;
+        screenshotMaxPixels?: number;
+        enableScreenshotPruning?: boolean;
+        screenshotKeepN?: number;
+        screenshotPruneTrigger?: number;
+        enableCodeExecution?: boolean;
+        codeExecutionTimeoutMs?: number;
+        codeExecutionMaxOutputChars?: number;
+        enablePromptCaching?: boolean;
+      }>("settings:get");
+      if (!settings?.apiKey) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: ++logIdCounter,
+            type: "error" as const,
+            content: "请先配置 API Key",
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
+      // 重新追加用户消息到 logs（保持原始内容/附件信息便于再次重试）
+      const replayedEntry: LogEntry = {
+        ...userEntry,
+        id: ++logIdCounter,
+        timestamp: Date.now(),
+      };
+      setLogs((prev) => [...prev, replayedEntry]);
+      setRunning(true);
+      try {
+        await sendMessage("agent:start", {
+          userMessage: fullMessage,
+          config: {
+            apiKey: settings.apiKey,
+            baseUrl: settings.baseUrl || "https://api.openai.com/v1",
+            model: settings.model || "gpt-4o",
+            permissionMode: autoMode ? "auto" : "ask",
+            showClickMarker: settings.showClickMarker !== false,
+            provider:
+              settings.provider === "anthropic" ? "anthropic" : "openai",
+            enableShortRefs: settings.enableShortRefs !== false,
+            screenshotScaleMode: ([
+              "off",
+              "claude46",
+              "claude47",
+              "custom",
+            ].includes(settings.screenshotScaleMode ?? "")
+              ? settings.screenshotScaleMode
+              : "claude46") as "off" | "claude46" | "claude47" | "custom",
+            screenshotMaxLongEdge:
+              typeof settings.screenshotMaxLongEdge === "number"
+                ? settings.screenshotMaxLongEdge
+                : 1568,
+            screenshotMaxPixels:
+              typeof settings.screenshotMaxPixels === "number"
+                ? settings.screenshotMaxPixels
+                : 1150000,
+            enableScreenshotPruning: settings.enableScreenshotPruning !== false,
+            screenshotKeepN:
+              typeof settings.screenshotKeepN === "number"
+                ? settings.screenshotKeepN
+                : 3,
+            screenshotPruneTrigger:
+              typeof settings.screenshotPruneTrigger === "number"
+                ? settings.screenshotPruneTrigger
+                : 12,
+            enableCodeExecution: settings.enableCodeExecution !== false,
+            codeExecutionTimeoutMs:
+              typeof settings.codeExecutionTimeoutMs === "number"
+                ? settings.codeExecutionTimeoutMs
+                : 1000,
+            codeExecutionMaxOutputChars:
+              typeof settings.codeExecutionMaxOutputChars === "number"
+                ? settings.codeExecutionMaxOutputChars
+                : 6000,
+            enablePromptCaching: settings.enablePromptCaching === true,
+          },
+        });
+      } catch (err) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: ++logIdCounter,
+            type: "error" as const,
+            content: String(err),
+            timestamp: Date.now(),
+          },
+        ]);
+        setRunning(false);
+      }
+    },
+    [logs, running, autoMode],
+  );
+
+  const handleAddFiles = useCallback((files: File[]) => {
+    const newAttachments: Attachment[] = files.map((file) => ({
       id: ++logIdCounter,
-      name: f.name,
-      type: f.type,
-      size: f.size,
-      file: f,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      file,
     }));
-    setAttachments((prev) => [...prev, ...newAttachments]);
-    e.target.value = "";
+    setAttachments((previous) => [...previous, ...newAttachments]);
   }, []);
+
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files) return;
+      handleAddFiles(Array.from(files));
+      e.target.value = "";
+    },
+    [handleAddFiles],
+  );
 
   const segments = useMemo(() => groupLogs(logs), [logs]);
   const turns = useMemo(() => groupIntoTurns(segments), [segments]);
-  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(new Set());
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(
+    new Set(),
+  );
   // 用户手动操作过（展开或折叠）的 key — 自动展开/折叠逻辑对这些 key 不再生效
   const [interactedKeys, setInteractedKeys] = useState<Set<number>>(new Set());
 
@@ -1358,7 +984,9 @@ export default function App() {
       }
       const groupKey = logs[groupStart].id;
       if (!interactedKeys.has(groupKey)) {
-        setExpandedGroupKeys((prev) => (prev.has(groupKey) ? prev : new Set([...prev, groupKey])));
+        setExpandedGroupKeys((prev) =>
+          prev.has(groupKey) ? prev : new Set([...prev, groupKey]),
+        );
       }
     } else if (last.type === "assistant") {
       // 助手开始正式回复：折叠所有未被用户碰过的 steps
@@ -1373,7 +1001,9 @@ export default function App() {
   }, [logs, interactedKeys]);
 
   const toggleGroup = useCallback((key: number) => {
-    setInteractedKeys((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
+    setInteractedKeys((prev) =>
+      prev.has(key) ? prev : new Set([...prev, key]),
+    );
     setExpandedGroupKeys((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -1383,98 +1013,141 @@ export default function App() {
   }, []);
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      {/* 顶栏 */}
-      <AppBar position="static" color="transparent" elevation={0}>
-        <Toolbar variant="dense" sx={{ gap: 1 }}>
-          <SmartToyIcon color="primary" />
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, flexGrow: 1 }}>
-            NekoPilot
-          </Typography>
-          <Tooltip title="新建对话">
-            <IconButton size="small" onClick={handleClearChat}>
-              <AddCommentIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={attached ? "断开 CDP" : "连接 CDP"}>
-            <IconButton size="small" onClick={handleAttach}>
-              {attached ? <LinkIcon color="success" /> : <LinkOffIcon color="disabled" />}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="设置">
-            <IconButton size="small" onClick={() => chrome.runtime.openOptionsPage()}>
-              <SettingsIcon />
-            </IconButton>
-          </Tooltip>
-        </Toolbar>
-      </AppBar>
-
-      {/* 对话区 */}
-      <Box ref={logsBoxRef} onScroll={handleLogsScroll} sx={{ flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
+    <div className="flex h-dvh min-w-0 flex-col">
+      <header className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
+        <Bot className="size-5 text-primary" />
+        <h1 className="flex-1 text-base font-semibold">NekoPilot</h1>
+        <IconAction label="新建对话" onClick={handleClearChat}>
+          <MessageSquarePlus />
+        </IconAction>
+        <IconAction
+          label={attached ? "断开 CDP" : "连接 CDP"}
+          onClick={handleAttach}
+        >
+          {attached ? (
+            <Link className="text-emerald-500" />
+          ) : (
+            <Unlink className="text-muted-foreground" />
+          )}
+        </IconAction>
+        <IconAction
+          label="设置"
+          onClick={() => chrome.runtime.openOptionsPage()}
+        >
+          <Settings />
+        </IconAction>
+      </header>
+      <div
+        ref={logsBoxRef}
+        onScroll={handleLogsScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+      >
+        {turns.length === 0 && (
+          <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+            <Bot className="size-10 text-primary/60" />
+            <p className="font-medium text-foreground">
+              有什么需要我帮你操作的？
+            </p>
+            <p className="max-w-64 text-xs leading-relaxed">
+              输入任务，或选择网页元素作为上下文。
+              <br />
+              Ask 模式下，操作执行前会等待你的批准。
+            </p>
+          </div>
+        )}
         {turns.map((turn) => {
           if (turn.kind === "user") {
-            const seg = turn.segment;
+            const entry = turn.segment.entry;
             return (
-              <Box key={seg.entry.id} sx={{ my: 1, "&:hover .hover-actions": { opacity: 1 } }}>
-                <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                  <Typography variant="body2">{seg.entry.content}</Typography>
-                  {seg.entry.pickedElements && seg.entry.pickedElements.length > 0 && (
-                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
-                      {seg.entry.pickedElements.map((el) => (
-                        <Chip
-                          key={`uel-${el.id}`}
-                          label={`<${el.tag}> ${el.text || el.selector}`}
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                          icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
-                          sx={{ maxWidth: 240, fontSize: "0.75rem" }}
+              <Message from="user" key={entry.id} className="mb-5 max-w-full">
+                <MessageContent className="w-full border">
+                  <p className="whitespace-pre-wrap break-words">
+                    {entry.content}
+                  </p>
+                  {!!entry.pickedElements?.length && (
+                    <div className="flex flex-wrap gap-1">
+                      {entry.pickedElements.map((element) => (
+                        <ReferenceChip
+                          key={element.id}
+                          label={`<${element.tag}> ${element.text || element.selector}`}
                         />
                       ))}
-                    </Box>
+                    </div>
                   )}
-                </Paper>
-                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25, mt: 0.25 }}>
-                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(seg.entry.content)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  <Tooltip title="编辑"><IconButton size="small" onClick={() => handleEditMessage(seg.entry.id)} disabled={running} sx={{ p: 0.25 }}><EditIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(seg.entry.id, true)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                </Stack>
-              </Box>
+                </MessageContent>
+                <MessageActions className="self-end">
+                  <MessageAction
+                    tooltip="复制"
+                    onClick={() => handleCopyText(entry.content)}
+                  >
+                    <Copy />
+                  </MessageAction>
+                  <MessageAction
+                    tooltip="编辑"
+                    disabled={running}
+                    onClick={() => handleEditMessage(entry.id)}
+                  >
+                    <Pencil />
+                  </MessageAction>
+                  <MessageAction
+                    tooltip="重试"
+                    disabled={running}
+                    onClick={() => handleRetry(entry.id, true)}
+                  >
+                    <RotateCcw />
+                  </MessageAction>
+                </MessageActions>
+              </Message>
             );
           }
-          // model turn: 多个 segment 组成一个完整回复块
           const isLast = turn === turns[turns.length - 1];
           const isComplete = !isLast || !running;
-          // 收集所有文本用于复制
-          const allText = turn.segments.map((seg) => {
-            if (seg.kind === "assistant") return seg.entry.content;
-            if (seg.kind === "steps") return seg.entries.filter((e) => e.type === "tool_call").map((e) => `${getToolLabel(e.toolName)}: ${e.toolResult ?? "..."}`).join("\n");
-            return "";
-          }).filter(Boolean).join("\n\n");
+          const allText = turn.segments
+            .map((segment) => {
+              if (segment.kind === "assistant") return segment.entry.content;
+              if (segment.kind === "steps")
+                return segment.entries
+                  .filter((entry) => entry.type === "tool_call")
+                  .map(
+                    (entry) =>
+                      `${getToolLabel(entry.toolName)}: ${entry.toolResult ?? "..."}`,
+                  )
+                  .join("\n");
+              return "";
+            })
+            .filter(Boolean)
+            .join("\n\n");
           return (
-            <Box key={turn.firstId} sx={{ mb: 2, "&:hover > .hover-actions": { opacity: 1 } }}>
-              {turn.segments.map((seg, segIdx) => {
-                if (seg.kind === "assistant") {
-                  return (
-                    <Box key={seg.entry.id} sx={{ mb: 1, ...markdownSx }}>
-                      <MarkdownMessage content={seg.entry.content} streaming={!isComplete} />
-                    </Box>
-                  );
-                }
-                if (seg.kind === "steps") {
-                  const groupKey = seg.entries[0].id;
-                  // 当本轮 turn 仍在运行，且当前 steps 是该 turn 最后一个 segment，
-                  // 且最后一个 step 是已完成的 tool_call（有 toolResult）——说明
-                  // 模型刚拿到工具结果、正在准备下一轮回复，此时挂一个 pending 占位 step。
-                  const isLastSeg = segIdx === turn.segments.length - 1;
-                  const lastEntry = seg.entries[seg.entries.length - 1];
-                  const lastIsCompletedTool = lastEntry?.type === "tool_call" && lastEntry.toolResult !== undefined;
-                  const lastIsDoneThinking = lastEntry?.type === "thinking" && lastEntry.thinkingDone === true;
-                  const showPending = isLast && running && isLastSeg && (lastIsCompletedTool || lastIsDoneThinking);
+            <Message
+              from="assistant"
+              key={turn.firstId}
+              className="mb-6 max-w-full"
+            >
+              <MessageContent className="w-full">
+                {turn.segments.map((segment, index) => {
+                  if (segment.kind === "assistant")
+                    return (
+                      <MarkdownMessage
+                        key={segment.entry.id}
+                        content={segment.entry.content}
+                        streaming={!isComplete}
+                      />
+                    );
+                  if (segment.kind !== "steps") return null;
+                  const groupKey = segment.entries[0].id;
+                  const lastEntry = segment.entries[segment.entries.length - 1];
+                  const showPending =
+                    isLast &&
+                    running &&
+                    index === turn.segments.length - 1 &&
+                    ((lastEntry.type === "tool_call" &&
+                      lastEntry.toolResult !== undefined) ||
+                      (lastEntry.type === "thinking" &&
+                        lastEntry.thinkingDone === true));
                   return (
                     <StepsGroup
                       key={groupKey}
-                      entries={seg.entries}
+                      entries={segment.entries}
                       expanded={expandedGroupKeys.has(groupKey)}
                       onToggle={() => toggleGroup(groupKey)}
                       onApprove={handleApprove}
@@ -1483,710 +1156,191 @@ export default function App() {
                       pending={showPending}
                     />
                   );
-                }
-                return null;
-              })}
+                })}
+              </MessageContent>
               {isComplete && (
-                <Stack direction="row" className="hover-actions" sx={{ opacity: 0, transition: "opacity 0.15s", gap: 0.25 }}>
-                  <Tooltip title="复制"><IconButton size="small" onClick={() => handleCopyText(allText)} sx={{ p: 0.25 }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  <Tooltip title="重试"><IconButton size="small" onClick={() => handleRetry(turn.firstId, false)} disabled={running} sx={{ p: 0.25 }}><ReplayIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                </Stack>
+                <MessageActions>
+                  <MessageAction
+                    tooltip="复制"
+                    onClick={() => handleCopyText(allText)}
+                  >
+                    <Copy />
+                  </MessageAction>
+                  <MessageAction
+                    tooltip="重试"
+                    disabled={running}
+                    onClick={() => handleRetry(turn.firstId, false)}
+                  >
+                    <RotateCcw />
+                  </MessageAction>
+                </MessageActions>
               )}
-            </Box>
+            </Message>
           );
         })}
-        {running && (logs.length === 0 || logs[logs.length - 1].type === "user") && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 1, pl: 0.5 }}>
-            <CircularProgress size={14} />
-            <Typography variant="body2" sx={{ opacity: 0.5 }}>正在工作…</Typography>
-          </Box>
-        )}
+        {running &&
+          (logs.length === 0 || logs[logs.length - 1].type === "user") && (
+            <WorkingIndicator />
+          )}
         <div ref={logsEndRef} />
-      </Box>
-
-      {/* 底栏 */}
-      <Box sx={{ p: 1.5, pt: 0 }}>
+      </div>
+      <footer className="shrink-0 space-y-2 px-3 pb-3">
         {autoMode && (
-          <Paper
-            variant="outlined"
-            sx={{
-              px: 1.5, py: 0.75, mb: 1, borderRadius: 2,
-              bgcolor: "warning.dark", borderColor: "warning.main",
-            }}
-          >
-            <Typography variant="caption" sx={{ color: "warning.contrastText" }}>
-              ⚠ Auto 模式：NekoPilot 将直接执行所有操作，不会询问确认。
-            </Typography>
-          </Paper>
+          <Alert className="border-amber-500/40 bg-amber-500/10 py-2 text-amber-700 dark:text-amber-300">
+            <AlertCircle className="size-4" />
+            <AlertDescription className="text-xs">
+              Auto 模式：直接执行所有操作，不会询问确认。
+            </AlertDescription>
+          </Alert>
         )}
-
-        <Paper variant="outlined" sx={{ borderRadius: 3, overflow: "hidden" }}>
-          {/* 附加 Chip */}
+        <PromptInput
+          onSubmit={() => handleSend()}
+          onFilesAdded={handleAddFiles}
+          className="rounded-xl bg-card"
+          accept="image/*,.pdf,.txt,.json,.csv"
+          multiple
+        >
           {(picking || pickedElements.length > 0 || attachments.length > 0) && (
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, px: 1.5, pt: 1, pb: 0 }}>
+            <div className="flex flex-wrap gap-1 px-3 pt-3">
               {picking && (
-                <Chip
-                  label={pickHover ? `当前选择：<${pickHover.tag}> ${pickHover.text.slice(0, 30) || ""}` : "正在选择元素..."}
-                  size="small"
-                  color="warning"
-                  variant="outlined"
-                  icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
-                  onDelete={handleCancelPick}
-                  sx={{ fontSize: "0.75rem", maxWidth: 280 }}
+                <ReferenceChip
+                  label={
+                    pickHover
+                      ? `当前选择：<${pickHover.tag}> ${pickHover.text.slice(0, 30)}`
+                      : "正在选择元素…"
+                  }
+                  onRemove={handleCancelPick}
+                  className="border-amber-500/50 text-amber-600 dark:text-amber-300"
                 />
               )}
-              {pickedElements.map((el) => (
-                <Chip
-                  key={`el-${el.id}`}
-                  label={`<${el.tag}> ${el.text || el.selector}`}
-                  size="small"
-                  color="primary"
-                  variant="outlined"
-                  icon={<NearMeIcon sx={{ fontSize: "14px !important" }} />}
-                  onDelete={() => setPickedElements((prev) => prev.filter((e) => e.id !== el.id))}
-                  sx={{ maxWidth: 200, fontSize: "0.75rem" }}
+              {pickedElements.map((element) => (
+                <ReferenceChip
+                  key={element.id}
+                  label={`<${element.tag}> ${element.text || element.selector}`}
+                  onRemove={() =>
+                    setPickedElements((previous) =>
+                      previous.filter((item) => item.id !== element.id),
+                    )
+                  }
                 />
               ))}
-              {attachments.map((att) => (
-                <Chip
-                  key={`att-${att.id}`}
-                  label={att.name}
-                  size="small"
-                  color="secondary"
-                  variant="outlined"
-                  icon={<AttachFileIcon sx={{ fontSize: "14px !important" }} />}
-                  onDelete={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                  sx={{ maxWidth: 200, fontSize: "0.75rem" }}
+              {attachments.map((attachment) => (
+                <ReferenceChip
+                  key={attachment.id}
+                  label={attachment.name}
+                  icon={<Paperclip className="size-3 shrink-0" />}
+                  onRemove={() =>
+                    setAttachments((previous) =>
+                      previous.filter((item) => item.id !== attachment.id),
+                    )
+                  }
                 />
               ))}
-            </Box>
+            </div>
           )}
-
-          {/* 输入 */}
-          <InputBase
-            fullWidth
-            multiline
-            maxRows={4}
-            placeholder="Reply to NekoPilot"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={running}
-            sx={{
-              px: 2,
-              pt: picking || pickedElements.length > 0 || attachments.length > 0 ? 0.5 : 1.5,
-              pb: 0.5,
-              fontSize: "0.9rem",
-            }}
-          />
-
-          {/* 工具行 */}
-          <Stack direction="row" alignItems="center" sx={{ px: 1, pb: 0.5, pt: 0 }}>
-            <Box
-              onClick={(e) => setModeMenuAnchor(e.currentTarget)}
-              sx={{
-                display: "flex", alignItems: "center", gap: 0.5,
-                cursor: "pointer", px: 1, py: 0.5, borderRadius: 1,
-                "&:hover": { bgcolor: "action.hover" }, userSelect: "none",
-              }}
-            >
-              {autoMode
-                ? <DoubleArrowIcon sx={{ fontSize: 16, opacity: 0.7 }} />
-                : <PanToolAltIcon sx={{ fontSize: 16, opacity: 0.7 }} />}
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                {autoMode ? "Auto mode" : "Ask before acting"}
-              </Typography>
-              <KeyboardArrowDownIcon sx={{ fontSize: 14, opacity: 0.5 }} />
-            </Box>
-
-            <Menu
-              anchorEl={modeMenuAnchor}
-              open={Boolean(modeMenuAnchor)}
-              onClose={() => setModeMenuAnchor(null)}
-              anchorOrigin={{ vertical: "top", horizontal: "left" }}
-              transformOrigin={{ vertical: "bottom", horizontal: "left" }}
-              slotProps={{ paper: { sx: { minWidth: 0 } }, list: { dense: true } }}
-            >
-              <MenuItem
-                onClick={() => { setAutoModeAndPersist(true); setModeMenuAnchor(null); }}
-                selected={autoMode}
-                sx={{ py: 0.5 }}
-              >
-                <ListItemIcon sx={{ minWidth: 28 }}>
-                  <DoubleArrowIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText slotProps={{ primary: { variant: "body2" } }}>Auto mode</ListItemText>
-              </MenuItem>
-              <MenuItem
-                onClick={() => { setAutoModeAndPersist(false); setModeMenuAnchor(null); }}
-                selected={!autoMode}
-                sx={{ py: 0.5 }}
-              >
-                <ListItemIcon sx={{ minWidth: 28 }}>
-                  <PanToolAltIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText slotProps={{ primary: { variant: "body2" } }}>Ask before acting</ListItemText>
-              </MenuItem>
-            </Menu>
-
-            <Box sx={{ flexGrow: 1 }} />
-
-            {promptTokens !== null && (
-              <Tooltip
-                title={
-                  <Box sx={{ whiteSpace: "pre-line" }}>
-                    {cacheInfo ? (
+          <PromptInputBody>
+            <PromptInputTextarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              disabled={running}
+              placeholder="给 NekoPilot 下达任务…"
+              aria-label="任务内容"
+              className="max-h-32 min-h-20"
+            />
+          </PromptInputBody>
+          <PromptInputFooter className="flex-wrap gap-y-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <PromptInputButton className="max-w-full text-xs">
+                  {autoMode ? <FastForward /> : <Hand />}
+                  <span>{autoMode ? "Auto mode" : "Ask before acting"}</span>
+                  <ChevronDown className="size-3" />
+                </PromptInputButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start">
+                <DropdownMenuRadioGroup
+                  value={autoMode ? "auto" : "ask"}
+                  onValueChange={(value) =>
+                    setAutoModeAndPersist(value === "auto")
+                  }
+                >
+                  <DropdownMenuRadioItem value="auto">
+                    <FastForward className="size-4" />
+                    Auto mode
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="ask">
+                    <Hand className="size-4" />
+                    Ask before acting
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <PromptInputTools className="ml-auto">
+              {promptTokens !== null && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="px-1 font-mono text-xs text-muted-foreground"
+                      aria-label="上下文 Token 用量"
+                    >
+                      {formatTokens(
+                        promptTokens +
+                          (cacheInfo ? cacheInfo.creation + cacheInfo.read : 0),
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <div>上下文: {promptTokens.toLocaleString()}</div>
+                    {cacheInfo && (
                       <>
-                        <div>上下文: {promptTokens.toLocaleString()}</div>
-                        <div>缓存写入: {cacheInfo.creation.toLocaleString()}</div>
+                        <div>
+                          缓存写入: {cacheInfo.creation.toLocaleString()}
+                        </div>
                         <div>缓存命中: {cacheInfo.read.toLocaleString()}</div>
                       </>
-                    ) : (
-                      <div>上下文: {promptTokens.toLocaleString()}</div>
                     )}
-                  </Box>
-                }
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              <PromptInputButton
+                aria-label="选择页面元素"
+                title="选择页面元素"
+                onClick={handlePickElement}
+                disabled={picking}
               >
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: "text.secondary",
-                    opacity: 0.7,
-                    fontFamily: "monospace",
-                    px: 0.75,
-                    userSelect: "none",
-                  }}
-                >
-                  {formatTokens(promptTokens + (cacheInfo ? cacheInfo.creation + cacheInfo.read : 0))}
-                </Typography>
-              </Tooltip>
-            )}
-
-            <Tooltip title={picking ? "正在选择..." : "选择页面元素"}>
-              <IconButton size="small" onClick={handlePickElement} disabled={picking} color={picking ? "primary" : "default"}>
-                <NearMeIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="添加附件">
-              <IconButton size="small" component="label">
-                <AttachFileIcon sx={{ fontSize: 18 }} />
-                <input ref={fileInputRef} type="file" hidden accept="image/*,.pdf,.txt,.json,.csv" multiple onChange={handleFileChange} />
-              </IconButton>
-            </Tooltip>
-            {running ? (
-              <Tooltip title="停止">
-                <IconButton size="small" onClick={handleStop}>
-                  <StopIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </Tooltip>
-            ) : (
-              <Tooltip title="发送消息">
-                <IconButton size="small" onClick={handleSend} disabled={!input.trim() && pickedElements.length === 0} color="primary">
-                  <SendIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Stack>
-        </Paper>
-      </Box>
-    </Box>
-  );
-}
-
-// ── 步骤时间线组件 ──
-
-// ── Steps 可折叠分组 ──
-
-function StepsGroup({
-  entries,
-  expanded,
-  onToggle,
-  onApprove,
-  onReject,
-  onDismiss,
-  pending,
-}: {
-  entries: LogEntry[];
-  expanded: boolean;
-  onToggle: () => void;
-  onApprove: (id: string) => void;
-  onReject: (id: string) => void;
-  onDismiss: (id: number) => void;
-  /** 模型正在生成下一轮回复时显示一个 spinner 占位 step */
-  pending?: boolean;
-}) {
-  // pending 是占位，不算真实 step，否则一个工具 + pending 会被错误地显示成 "2 steps" 折叠头。
-  const stepCount = entries.filter((e) => e.type === "tool_call" || e.type === "thinking").length;
-
-  // 只有 1 步时直接显示，不包裹
-  if (stepCount <= 1) {
-    return (
-      <Box>
-        {entries.map((entry, i) => (
-          <TimelineStep
-            key={entry.id}
-            entry={entry}
-            showTopLine={i > 0}
-            showBottomLine={i < entries.length - 1 || !!pending}
-            onApprove={onApprove}
-            onReject={onReject}
-            onDismiss={onDismiss}
-          />
-        ))}
-        {pending && (
-          <TimelineStep
-            key="__pending__"
-            entry={{ id: -1, type: "pending", content: "", timestamp: Date.now() }}
-            showTopLine={entries.length > 0}
-            showBottomLine={false}
-            onApprove={onApprove}
-            onReject={onReject}
-            onDismiss={onDismiss}
-          />
-        )}
-      </Box>
-    );
-  }
-
-  return (
-    <Box>
-      {/* 可折叠标题 */}
-      <Box
-        onClick={onToggle}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.5,
-          cursor: "pointer",
-          pt: 1,
-          pb: 1.5,
-          "&:hover": { opacity: 0.8 },
-          userSelect: "none",
-        }}
-      >
-        <Typography variant="body2" sx={{ opacity: 0.5, fontWeight: 500 }}>
-          {stepCount} {stepCount === 1 ? "step" : "steps"}
-        </Typography>
-        <ExpandMoreIcon
-          sx={{
-            fontSize: 16,
-            transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
-            transition: "transform 0.2s",
-            opacity: 0.4,
-          }}
+                <MousePointer2 className={cn(picking && "text-primary")} />
+              </PromptInputButton>
+              <PromptInputButton
+                aria-label="添加附件"
+                title="添加附件"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Paperclip />
+              </PromptInputButton>
+              <PromptInputSubmit
+                type={running ? "button" : "submit"}
+                status={running ? "streaming" : "ready"}
+                aria-label={running ? "停止" : "发送消息"}
+                disabled={
+                  !running && !input.trim() && pickedElements.length === 0
+                }
+                onClick={running ? handleStop : undefined}
+              />
+            </PromptInputTools>
+          </PromptInputFooter>
+        </PromptInput>
+        <input
+          ref={fileInputRef}
+          type="file"
+          hidden
+          accept="image/*,.pdf,.txt,.json,.csv"
+          multiple
+          onChange={handleFileChange}
         />
-      </Box>
-
-      {/* 可折叠时间线 */}
-      <Collapse in={expanded}>
-        {entries.map((entry, i) => (
-          <TimelineStep
-            key={entry.id}
-            entry={entry}
-            showTopLine={i > 0}
-            showBottomLine={i < entries.length - 1 || !!pending}
-            onApprove={onApprove}
-            onReject={onReject}
-            onDismiss={onDismiss}
-          />
-        ))}
-        {pending && (
-          <TimelineStep
-            key="__pending__"
-            entry={{ id: -1, type: "pending", content: "", timestamp: Date.now() }}
-            showTopLine={entries.length > 0}
-            showBottomLine={false}
-            onApprove={onApprove}
-            onReject={onReject}
-            onDismiss={onDismiss}
-          />
-        )}
-      </Collapse>
-    </Box>
-  );
-}
-
-// ── 时间线步骤 ──
-
-function TimelineStep({
-  entry,
-  showTopLine,
-  showBottomLine,
-  onApprove,
-  onReject,
-  onDismiss,
-}: {
-  entry: LogEntry;
-  showTopLine: boolean;
-  showBottomLine: boolean;
-  onApprove: (id: string) => void;
-  onReject: (id: string) => void;
-  onDismiss: (id: number) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [userTouched, setUserTouched] = useState(false);
-  const handleToggle = useCallback(() => {
-    setUserTouched(true);
-    setExpanded((e) => !e);
-  }, []);
-
-  const icon =
-    entry.type === "error" ? (
-      <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main" }} />
-    ) : entry.type === "thinking" ? (
-      <PsychologyAltOutlinedIcon sx={{ fontSize: 16, color: "text.secondary" }} />
-    ) : entry.type === "pending" ? (
-      <CircularProgress size={12} sx={{ color: "text.secondary" }} />
-    ) : (
-      <Box sx={{ color: "text.secondary", display: "flex" }}>{getToolIcon(entry.toolName)}</Box>
-    );
-
-  return (
-    <Box sx={{ display: "flex", alignItems: "stretch" }}>
-      {/* 时间线列 */}
-      <Box
-        sx={{
-          width: 24,
-          flexShrink: 0,
-          position: "relative",
-        }}
-      >
-        {/* 上半段线：从顶部到 icon 中心（10px） */}
-        <Box
-          sx={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            top: 0,
-            height: 10,
-            width: 1.5,
-            bgcolor: showTopLine ? "divider" : "transparent",
-          }}
-        />
-        {/* 下半段线：从 icon 中心到底部 */}
-        <Box
-          sx={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            top: 10,
-            bottom: 0,
-            width: 1.5,
-            bgcolor: showBottomLine ? "divider" : "transparent",
-          }}
-        />
-        {/* icon — 锚定顶部，与首行内容垂直居中（首行高约 20px） */}
-        <Box
-          sx={{
-            position: "absolute",
-            top: 0,
-            left: "50%",
-            transform: "translateX(-50%)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 20,
-            height: 20,
-            zIndex: 1,
-            bgcolor: "background.default",
-            borderRadius: "50%",
-          }}
-        >
-          {icon}
-        </Box>
-      </Box>
-
-      {/* 内容列 */}
-      <Box sx={{ flex: 1, minWidth: 0, pb: 1, pl: 1, minHeight: 20 }}>
-        {entry.type === "tool_call" && (
-          <ToolCallStep
-            entry={entry}
-            expanded={expanded}
-            onToggle={handleToggle}
-            onApprove={onApprove}
-            onReject={onReject}
-          />
-        )}
-
-        {entry.type === "thinking" && (
-          <ThinkingStep
-            entry={entry}
-            expanded={entry.thinkingDone || userTouched ? expanded : true}
-            onToggle={handleToggle}
-          />
-        )}
-
-        {entry.type === "error" && (
-          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
-            <Typography variant="body2" sx={{ color: "error.main", flex: 1, lineHeight: 1.6 }}>
-              {entry.content}
-            </Typography>
-            <IconButton size="small" onClick={() => onDismiss(entry.id)} sx={{ mt: -0.5 }}>
-              <CloseIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Box>
-        )}
-
-        {entry.type === "pending" && (
-          <Typography
-            variant="body2"
-            sx={{ color: "text.secondary", opacity: 0.7, lineHeight: "20px" }}
-          >
-            正在工作…
-          </Typography>
-        )}
-      </Box>
-    </Box>
-  );
-}
-
-// ── 思考步骤 ──
-
-function ThinkingStep({
-  entry,
-  expanded,
-  onToggle,
-}: {
-  entry: LogEntry;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const { think } = useMemo(() => splitThinkText(entry.content), [entry.content]);
-  const done = !!entry.thinkingDone;
-  const label = done
-    ? `已思考 ${entry.thinkSeconds ?? 1} 秒`
-    : "Thinking…";
-  const previewSrc = think || entry.content.replace(/<\/?think>/gi, "");
-  const preview = useMemo(() => {
-    const firstLine = previewSrc.split("\n").find((l) => l.trim()) ?? "";
-    return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
-  }, [previewSrc]);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // 流式中思考内容增长时，自动滚到底部
-  useEffect(() => {
-    if (!done && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [previewSrc, done]);
-  const hasContent = !!(think || (!done && previewSrc));
-
-  return (
-    <Box>
-      <Box
-        onClick={hasContent ? onToggle : undefined}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.75,
-          cursor: hasContent ? "pointer" : "default",
-          "&:hover": hasContent ? { opacity: 0.85 } : {},
-          userSelect: "none",
-          minHeight: 20,
-        }}
-      >
-        <Typography
-          variant="body2"
-          sx={{ fontWeight: 500, color: "text.secondary", fontStyle: done ? "normal" : "italic", lineHeight: "20px", whiteSpace: "nowrap", flexShrink: 0 }}
-        >
-          {label}
-        </Typography>
-        {!expanded && preview ? (
-          <Typography
-            variant="caption"
-            sx={{ opacity: 0.4, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "1 1 auto" }}
-          >
-            {preview}
-          </Typography>
-        ) : (
-          // 占位，保证后面 spinner / 箭头始终右对齐
-          <Box sx={{ flex: "1 1 auto", minWidth: 0 }} />
-        )}
-        {!done && <CircularProgress size={12} sx={{ flexShrink: 0 }} />}
-        {hasContent && (
-          <ExpandMoreIcon
-            sx={{
-              fontSize: 16,
-              transform: expanded ? "rotate(180deg)" : "none",
-              transition: "transform 0.2s",
-              opacity: 0.4,
-              flexShrink: 0,
-            }}
-          />
-        )}
-      </Box>
-      <Collapse in={expanded}>
-        <Box
-          ref={scrollRef}
-          sx={{
-            mt: 0.5,
-            pl: 1,
-            opacity: 0.75,
-            maxHeight: 200,
-            overflowY: "auto",
-            ...markdownSx,
-            fontSize: "0.85rem",
-            "& p": { fontSize: "0.85rem", my: 0.5 },
-          }}
-        >
-          <ReactMarkdown
-            remarkPlugins={markdownRemarkPlugins}
-            rehypePlugins={markdownRehypePlugins}
-          >
-            {think || previewSrc}
-          </ReactMarkdown>
-        </Box>
-      </Collapse>
-    </Box>
-  );
-}
-
-// ── 工具调用步骤 ──
-
-function ToolCallStep({
-  entry,
-  expanded,
-  onToggle,
-  onApprove,
-  onReject,
-}: {
-  entry: LogEntry;
-  expanded: boolean;
-  onToggle: () => void;
-  onApprove: (id: string) => void;
-  onReject: (id: string) => void;
-}) {
-  const hasResult = entry.toolResult !== undefined;
-  const isScreenshot = entry.toolName === "screenshot";
-  const isPending = !hasResult && entry.needsPermission && !entry.permissionResolved;
-  const isExecuting = !hasResult && (!entry.needsPermission || entry.permissionResolved);
-  const argsMarkdown = formatToolArgsMarkdown(entry.toolName, entry.content);
-  const resultMarkdown = formatToolResultMarkdown(entry.toolName, entry.toolResult);
-  const hasDetails = Boolean(argsMarkdown || resultMarkdown || (isScreenshot && entry.screenshotData));
-
-  return (
-    <Box>
-      {/* 操作标签 */}
-      <Box
-        onClick={hasDetails ? onToggle : undefined}
-        sx={{
-          display: "flex", alignItems: "center", gap: 0.75,
-          flexWrap: "nowrap", minWidth: 0,
-          cursor: hasDetails ? "pointer" : "default",
-          "&:hover": hasDetails ? { opacity: 0.8 } : {},
-        }}
-      >
-        <Typography variant="body2" sx={{ fontWeight: 500, color: "text.secondary", lineHeight: "20px", whiteSpace: "nowrap", flexShrink: 0 }}>
-          {getToolLabel(entry.toolName)}
-        </Typography>
-        {(() => {
-          const subtitle = getToolSubtitle(entry.toolName, entry.content);
-          return subtitle ? (
-            <Typography
-              variant="caption"
-              sx={{ color: "text.secondary", opacity: 0.7, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "1 1 auto" }}
-            >
-              {subtitle}
-            </Typography>
-          ) : (
-            // 占位，让右侧图标与箭头始终右对齐
-            <Box sx={{ flex: "1 1 auto", minWidth: 0 }} />
-          );
-        })()}
-
-        {isExecuting && <CircularProgress size={12} sx={{ flexShrink: 0 }} />}
-
-        {hasResult && entry.toolSuccess && (
-          <CheckCircleOutlineIcon sx={{ fontSize: 14, color: "success.main", flexShrink: 0 }} />
-        )}
-        {hasResult && !entry.toolSuccess && (
-          <ErrorOutlineIcon sx={{ fontSize: 14, color: "error.main", flexShrink: 0 }} />
-        )}
-
-        {hasDetails && (
-          <ExpandMoreIcon
-            sx={{
-              fontSize: 16,
-              transform: expanded ? "rotate(180deg)" : "none",
-              transition: "transform 0.2s",
-              opacity: 0.4,
-              flexShrink: 0,
-            }}
-          />
-        )}
-      </Box>
-
-      {/* 截图缩略图 — 可折叠 */}
-      {isScreenshot && entry.screenshotData && (
-        <Collapse in={expanded}>
-          {argsMarkdown && (
-            <Box sx={{ mt: 0.75, ...markdownSx, fontSize: "0.8rem", "& p": { my: 0.5 } }}>
-              <MarkdownMessage content={argsMarkdown} streaming={false} />
-            </Box>
-          )}
-          <Box
-            component="img"
-            src={`data:${entry.screenshotMime || "image/png"};base64,${entry.screenshotData}`}
-            sx={{
-              width: 80, height: 50, objectFit: "cover",
-              borderRadius: 1, mt: 0.5, border: 1, borderColor: "divider", display: "block",
-              ...(entry.prunedFromContext ? { opacity: 0.5, filter: "grayscale(0.8)" } : {}),
-            }}
-          />
-          {entry.prunedFromContext && (
-            <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: 0.25 }}>
-              已从上下文删除
-            </Typography>
-          )}
-        </Collapse>
-      )}
-
-      {/* 权限确认 */}
-      {isPending && (
-        <Stack direction="row" gap={1} sx={{ mt: 0.75 }}>
-          <Button size="small" variant="outlined" onClick={() => onApprove(entry.toolCallId!)}>
-            允许
-          </Button>
-          <Button size="small" variant="outlined" color="error" onClick={() => onReject(entry.toolCallId!)}>
-            拒绝
-          </Button>
-        </Stack>
-      )}
-
-      {/* 可折叠结果 */}
-      {!isScreenshot && (argsMarkdown || resultMarkdown) && (
-        <Collapse in={expanded}>
-          {argsMarkdown && (
-            <Box
-              sx={{
-                mt: 0.5,
-                maxHeight: 220,
-                overflow: "auto",
-                opacity: 0.8,
-                ...markdownSx,
-                fontSize: "0.8rem",
-                "& p": { my: 0.5 },
-              }}
-            >
-              <MarkdownMessage content={argsMarkdown} streaming={false} />
-            </Box>
-          )}
-          {resultMarkdown && (
-            <Box
-              sx={{
-                mt: argsMarkdown ? 0.75 : 0.5,
-                maxHeight: 220,
-                overflow: "auto",
-                opacity: 0.72,
-                ...markdownSx,
-                fontSize: "0.78rem",
-                "& p": { my: 0.5 },
-              }}
-            >
-              <MarkdownMessage content={resultMarkdown} streaming={false} />
-            </Box>
-          )}
-        </Collapse>
-      )}
-    </Box>
+      </footer>
+    </div>
   );
 }

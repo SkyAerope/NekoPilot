@@ -1,50 +1,50 @@
-import { createTheme, type PaletteMode } from "@mui/material/styles";
+import { useEffect, useState } from "react";
 
 export type ThemeMode = "light" | "dark" | "auto";
 
-const common = {
-  typography: {
-    fontFamily: "'Segoe UI', 'Noto Sans SC', sans-serif",
-    fontSize: 13,
-  },
-  shape: { borderRadius: 10 },
-  components: {
-    MuiButton: {
-      defaultProps: { size: "small" as const, variant: "contained" as const },
-    },
-    MuiTextField: {
-      defaultProps: { size: "small" as const, variant: "outlined" as const },
-    },
-  },
-};
-
-export function buildTheme(paletteMode: PaletteMode) {
-  return createTheme({
-    ...common,
-    palette:
-      paletteMode === "dark"
-        ? {
-            mode: "dark",
-            primary: { main: "#a78bfa" },
-            secondary: { main: "#f472b6" },
-            background: { default: "#1a1a2e", paper: "#16213e" },
-          }
-        : {
-            mode: "light",
-            primary: { main: "#7c5cbf" },
-            secondary: { main: "#d946a8" },
-            background: { default: "#f8f8fa", paper: "#ffffff" },
-          },
-  });
+function isThemeMode(value: unknown): value is ThemeMode {
+  return value === "light" || value === "dark" || value === "auto";
 }
 
-export function resolveMode(mode: ThemeMode): PaletteMode {
-  if (mode === "auto") {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
-  }
-  return mode;
-}
+export function useTheme() {
+  const [mode, setMode] = useState<ThemeMode>("auto");
 
-export const theme = buildTheme("dark");
+  useEffect(() => {
+    chrome.storage.local.get("themeMode", (data) => {
+      if (isThemeMode(data.themeMode)) setMode(data.themeMode);
+    });
+    const listener = (
+      changes: Record<string, chrome.storage.StorageChange>,
+    ) => {
+      if (changes.themeMode) {
+        setMode(
+          isThemeMode(changes.themeMode.newValue)
+            ? changes.themeMode.newValue
+            : "auto",
+        );
+      }
+    };
+    chrome.storage.local.onChanged.addListener(listener);
+    return () => chrome.storage.local.onChanged.removeListener(listener);
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      document.documentElement.classList.toggle(
+        "dark",
+        mode === "dark" || (mode === "auto" && media.matches),
+      );
+    };
+    applyTheme();
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [mode]);
+
+  const changeTheme = (next: ThemeMode) => {
+    setMode(next);
+    chrome.storage.local.set({ themeMode: next });
+  };
+
+  return { mode, changeTheme };
+}
