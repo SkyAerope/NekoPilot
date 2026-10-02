@@ -87,7 +87,7 @@ export const MessageAction = ({
       type="button"
       variant={variant}
       className={cn(
-        "text-muted-foreground hover:text-foreground [&_svg]:[stroke-width:1.5]",
+        "relative text-muted-foreground hover:text-foreground [&_svg]:[stroke-width:1.5]",
         className,
       )}
       {...props}

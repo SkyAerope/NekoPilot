@@ -142,6 +142,58 @@ async function expectNoOverflow(page: Page) {
   ).toBe(true);
 }
 
+test("长对话仅在聊天区滚动，整页不会出现底部空白", async ({ page }) => {
+  await installHarness(page, {
+    chatLogs: Array.from({ length: 30 }, (_, index) => ({
+      id: index + 1,
+      type: index % 2 ? "assistant" : "user",
+      content: `消息 ${index + 1}\n${"检查侧边栏滚动布局。\n".repeat(6)}`,
+      timestamp: index + 1,
+    })),
+  });
+  await page.goto("/sidepanel.html");
+  await expect(page.getByText("消息 30", { exact: false })).toBeVisible();
+
+  const chat = page.locator("#root > div > div");
+  const expectPageWithinViewport = async () => {
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollHeight <= innerHeight,
+        ),
+      )
+      .toBe(true);
+  };
+
+  await expectPageWithinViewport();
+  expect(
+    await chat.evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    ),
+  ).toBe(true);
+
+  await chat.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(page.getByText(/^消息 1\n/)).toBeInViewport();
+  await expectPageWithinViewport();
+
+  await page.setViewportSize({ width: 320, height: 600 });
+  await chat.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(page.getByText("消息 30", { exact: false })).toBeInViewport();
+  await expectPageWithinViewport();
+
+  await page.evaluate(() =>
+    window.scrollTo(0, document.documentElement.scrollHeight),
+  );
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+  await expect(
+    page.getByRole("textbox", { name: "任务内容" }),
+  ).toBeInViewport();
+});
+
 test("设置保留自由模型名、自动保存和条件字段", async ({ page }) => {
   await installHarness(page);
   await page.goto("/options.html");
