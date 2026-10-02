@@ -10,12 +10,9 @@ function escapeMathDelimiters(raw: string): string {
   return raw.replace(/\$/g, "\\$");
 }
 
-function appendSyntheticMathCloser(
-  content: string,
-  closer: "$" | "$$",
-): string {
-  if (closer === "$$") {
-    return content + (content.endsWith("\n") ? "" : "\n") + "$$";
+function appendSyntheticMathCloser(content: string, closer: string): string {
+  if (closer.length >= 2) {
+    return content + (content.endsWith("\n") ? "" : "\n") + closer;
   }
 
   let trailingBackslashes = 0;
@@ -38,63 +35,76 @@ function getStreamingMarkdownPreview(
 ): string {
   if (!streaming || !content) return content;
 
-  let insideInlineCode = false;
-  let insideFence = false;
-  let insideInlineMath = false;
-  let insideBlockMath = false;
+  const { openMath } = scanMathSegments(content);
+  if (openMath) {
+    return appendSyntheticMathCloser(content, "$".repeat(openMath.length));
+  }
+  return content;
+}
+
+type CodeRange = { start: number; end: number };
+type MathSegment = {
+  expression: string;
+  displayMode: boolean;
+  start: number;
+  end: number;
+  raw: string;
+};
+
+function collectCodeRanges(content: string): CodeRange[] {
+  const ranges: CodeRange[] = [];
+  let fence: { marker: string; length: number; start: number } | null = null;
 
   for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    const prev = index > 0 ? content[index - 1] : "";
-
-    if (!insideInlineCode && char === "`" && prev !== "\\") {
-      const tickStart = index;
-      while (index + 1 < content.length && content[index + 1] === "`")
-        index += 1;
-      const tickCount = index - tickStart + 1;
-      const lineStart = tickStart === 0 || content[tickStart - 1] === "\n";
-
-      if (tickCount >= 3 && lineStart) {
-        insideFence = !insideFence;
+    if (index === 0 || content[index - 1] === "\n") {
+      const lineEnd = content.indexOf("\n", index);
+      const end = lineEnd === -1 ? content.length : lineEnd + 1;
+      const line = content.slice(index, end).trimEnd();
+      const match =
+        /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?(`{3,}|~{3,})(.*)$/.exec(
+          line,
+        );
+      if (fence) {
+        if (
+          match &&
+          match[1][0] === fence.marker &&
+          match[1].length >= fence.length &&
+          !match[2].trim()
+        ) {
+          ranges.push({ start: fence.start, end });
+          fence = null;
+        }
+        index = end - 1;
         continue;
       }
-
-      if (!insideFence && tickCount === 1) {
-        insideInlineCode = !insideInlineCode;
+      if (match && (match[1][0] !== "`" || !match[2].includes("`"))) {
+        fence = { marker: match[1][0], length: match[1].length, start: index };
+        index = end - 1;
+        continue;
       }
-      continue;
     }
 
-    if (insideFence || insideInlineCode) continue;
-
-    if (char === "\\") {
+    if (content[index] === "\\") {
       index += 1;
       continue;
     }
-
-    if (char !== "$") continue;
-
-    const dollarStart = index;
-    while (index + 1 < content.length && content[index + 1] === "$") index += 1;
-    const dollarCount = index - dollarStart + 1;
-
-    if (insideBlockMath) {
-      if (dollarCount >= 2) insideBlockMath = false;
-      continue;
+    if (content[index] !== "`") continue;
+    const start = index;
+    while (content[index + 1] === "`") index += 1;
+    const length = index - start + 1;
+    // 行内代码只能由相同长度的反引号闭合，内部的转义不影响定界符。
+    for (let cursor = index + 1; cursor < content.length; cursor += 1) {
+      if (content[cursor] !== "`") continue;
+      const closerStart = cursor;
+      while (content[cursor + 1] === "`") cursor += 1;
+      if (cursor - closerStart + 1 !== length) continue;
+      ranges.push({ start, end: cursor + 1 });
+      index = cursor;
+      break;
     }
-
-    if (dollarCount >= 2) {
-      insideBlockMath = true;
-      if (dollarCount % 2 === 1) insideInlineMath = !insideInlineMath;
-      continue;
-    }
-
-    insideInlineMath = !insideInlineMath;
   }
-
-  if (insideBlockMath) return appendSyntheticMathCloser(content, "$$");
-  if (insideInlineMath) return appendSyntheticMathCloser(content, "$");
-  return content;
+  if (fence) ranges.push({ start: fence.start, end: content.length });
+  return ranges;
 }
 
 function normalizeDisplayMathBlocks(content: string): string {
@@ -125,18 +135,22 @@ function normalizeDisplayMathBlocks(content: string): string {
 }
 
 function normalizeBracketMath(content: string): string {
+  const ranges = collectCodeRanges(content);
+  let result = "";
+  let cursor = 0;
+  for (const range of ranges) {
+    result += normalizeBracketMathText(content.slice(cursor, range.start));
+    result += content.slice(range.start, range.end);
+    cursor = range.end;
+  }
+  return result + normalizeBracketMathText(content.slice(cursor));
+}
+
+function normalizeBracketMathText(content: string): string {
   const lines = content.split("\n");
-  let insideFence = false;
 
   return lines
     .map((line) => {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith("```")) {
-        insideFence = !insideFence;
-        return line;
-      }
-      if (insideFence) return line;
-
       // LaTeX 的转义定界符先归一化，避免被普通方括号规则拆成转义美元符号。
       if (/^\s*\\\[\s*$/.test(line) || /^\s*\\\]\s*$/.test(line)) return "$$";
       const normalizedLine = line.replace(
@@ -193,103 +207,65 @@ function escapeInvalidMathBlocks(content: string): string {
   return next;
 }
 
-function collectMathSegments(content: string): Array<{
-  expression: string;
-  displayMode: boolean;
-  start: number;
-  end: number;
-  raw: string;
-}> {
-  const segments: Array<{
-    expression: string;
-    displayMode: boolean;
-    start: number;
-    end: number;
-    raw: string;
-  }> = [];
-  let insideInlineCode = false;
-  let insideFence = false;
-  let inlineMathStart = -1;
-  let blockMathStart = -1;
+function collectMathSegments(content: string): MathSegment[] {
+  return scanMathSegments(content).segments;
+}
+
+function scanMathSegments(content: string): {
+  segments: MathSegment[];
+  openMath: { start: number; length: number; displayMode: boolean } | null;
+} {
+  const segments: MathSegment[] = [];
+  const codeRanges = collectCodeRanges(content);
+  let rangeIndex = 0;
+  let openMath: { start: number; length: number; displayMode: boolean } | null =
+    null;
 
   for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    const prev = index > 0 ? content[index - 1] : "";
-
-    if (!insideInlineCode && char === "`" && prev !== "\\") {
-      const tickStart = index;
-      while (index + 1 < content.length && content[index + 1] === "`")
-        index += 1;
-      const tickCount = index - tickStart + 1;
-      const lineStart = tickStart === 0 || content[tickStart - 1] === "\n";
-
-      if (tickCount >= 3 && lineStart) {
-        insideFence = !insideFence;
-        continue;
-      }
-
-      if (!insideFence && tickCount === 1) {
-        insideInlineCode = !insideInlineCode;
-      }
+    const range = codeRanges[rangeIndex];
+    if (range && index === range.start) {
+      index = range.end - 1;
+      rangeIndex += 1;
       continue;
     }
-
-    if (insideFence || insideInlineCode) continue;
-
-    if (char === "\\") {
+    if (content[index] === "\\") {
       index += 1;
       continue;
     }
+    // 行内公式不能跨空段落，避免将金额后的正文当成未闭合公式。
+    if (
+      openMath &&
+      !openMath.displayMode &&
+      content[index] === "\n" &&
+      /^\n[ \t]*\n/.test(content.slice(index))
+    ) {
+      openMath = null;
+    }
+    if (content[index] !== "$") continue;
 
-    if (char !== "$") continue;
-
-    const dollarStart = index;
-    while (index + 1 < content.length && content[index + 1] === "$") index += 1;
-    const dollarCount = index - dollarStart + 1;
-
-    if (blockMathStart !== -1) {
-      if (dollarCount >= 2) {
-        const start = blockMathStart - 2;
-        const end = dollarStart + dollarCount;
-        segments.push({
-          expression: content.slice(blockMathStart, dollarStart),
-          displayMode: true,
-          start,
-          end,
-          raw: content.slice(start, end),
-        });
-        blockMathStart = -1;
-      }
+    const start = index;
+    while (content[index + 1] === "$") index += 1;
+    const length = index - start + 1;
+    if (
+      openMath &&
+      (openMath.displayMode ? length >= openMath.length : length === 1)
+    ) {
+      const end = index + 1;
+      segments.push({
+        expression: content.slice(openMath.start + openMath.length, start),
+        displayMode: openMath.displayMode,
+        start: openMath.start,
+        end,
+        raw: content.slice(openMath.start, end),
+      });
+      openMath = null;
       continue;
     }
-
-    if (inlineMathStart !== -1) {
-      if (dollarCount === 1) {
-        const start = inlineMathStart - 1;
-        const end = dollarStart + 1;
-        segments.push({
-          expression: content.slice(inlineMathStart, dollarStart),
-          displayMode: false,
-          start,
-          end,
-          raw: content.slice(start, end),
-        });
-        inlineMathStart = -1;
-        continue;
-      }
-
-      inlineMathStart = -1;
-    }
-
-    if (dollarCount >= 2) {
-      blockMathStart = dollarStart + 2;
-      continue;
-    }
-
-    inlineMathStart = dollarStart + 1;
+    if (openMath?.displayMode) continue;
+    openMath = { start, length, displayMode: length >= 2 };
   }
 
-  return segments;
+  return { segments, openMath };
 }
 
 function canRenderMathSegment(segment: {
