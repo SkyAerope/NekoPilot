@@ -1,3 +1,5 @@
+import type { TargetTab } from "../shared/target-tab";
+
 export interface PickedElement {
   id: number;
   tag: string;
@@ -29,6 +31,7 @@ export interface LogEntry {
   screenshotMime?: string;
   prunedFromContext?: boolean;
   pickedElements?: PickedElement[];
+  targetTab?: TargetTab;
   // thinking 相关
   thinkingDone?: boolean;
   thinkSeconds?: number;

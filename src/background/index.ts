@@ -5,6 +5,8 @@ import { CdpManager } from "./cdp";
 import { ToolExecutor } from "../tools/executor";
 import { AgentLoop } from "../agent/loop";
 import type { AgentConfig, ChatMessage } from "../agent/types";
+import type { TargetTab, TargetTabStatus } from "../shared/target-tab";
+import { prependPageContext } from "../shared/page-context";
 
 // 开发期自动热重载：`pnpm dev`（vite build --watch）每次重建后会写入 dist/reload.json，
 // 这里轮询其时间戳，一旦变化就 chrome.runtime.reload() 自动重载整个扩展。
@@ -34,9 +36,106 @@ const cdp = new CdpManager();
 const tools = new ToolExecutor(cdp);
 
 let agentLoop: AgentLoop | null = null;
+let agentBusy = false;
+let stopRequested = false;
+let targetChanging = false;
+let pickerBusy = false;
+let targetTabId: number | null = null;
+let targetPinned = false;
+let targetPinPending: Promise<void> | null = null;
+let targetRevision = 0;
+const targetReady = chrome.storage.session
+  .get(["targetTabId", "targetTabPinned"])
+  .then((data) => {
+    if (typeof data.targetTabId === "number") targetTabId = data.targetTabId;
+    targetPinned = data.targetTabPinned === true;
+  });
+
+function describeTab(tab: chrome.tabs.Tab): TargetTab {
+  return {
+    id: tab.id!,
+    title: tab.title || tab.url || "未命名标签页",
+    url: tab.url || "",
+    favIconUrl: tab.favIconUrl,
+    lastAccessed: tab.lastAccessed,
+  };
+}
+
+async function getTargetTab(): Promise<chrome.tabs.Tab> {
+  await Promise.all([targetReady, historyReady]);
+  if (
+    targetTabId === null ||
+    (!targetPinned && conversationHistory.length === 0)
+  )
+    return getActiveTab();
+  try {
+    return await chrome.tabs.get(targetTabId);
+  } catch {
+    throw new Error("操作标签页已关闭，请在输入框下方切换标签页。");
+  }
+}
+
+async function selectTargetTab(
+  tab: chrome.tabs.Tab,
+  pinTarget = false,
+): Promise<void> {
+  const nextPinned = targetPinned || pinTarget;
+  if (targetTabId === tab.id && targetPinned === nextPinned) return;
+  await chrome.storage.session.set({
+    targetTabId: tab.id!,
+    targetTabPinned: nextPinned,
+  });
+  if (targetTabId !== tab.id) tools.resetShortRefs();
+  targetTabId = tab.id!;
+  targetPinned = nextPinned;
+}
+
+async function getTargetStatus(hasMessages = false): Promise<TargetTabStatus> {
+  const revision = targetRevision;
+  await Promise.all([targetReady, historyReady]);
+  const active = await getActiveTab().catch(() => null);
+  // UI 中的失败消息也算对话；首次出现消息时固定当时跟随的页面。
+  if (
+    hasMessages &&
+    revision === targetRevision &&
+    !targetPinned &&
+    conversationHistory.length === 0 &&
+    !agentBusy &&
+    !pickerBusy &&
+    !targetChanging &&
+    !targetPinPending &&
+    active
+  ) {
+    targetPinPending = selectTargetTab(active, true);
+    try {
+      await targetPinPending;
+    } finally {
+      targetPinPending = null;
+    }
+  }
+  await targetPinPending;
+  const followingActive =
+    !targetPinned &&
+    conversationHistory.length === 0 &&
+    !agentBusy &&
+    !pickerBusy &&
+    !targetChanging;
+  const target =
+    targetTabId === null || followingActive
+      ? active
+      : await chrome.tabs.get(targetTabId).catch(() => null);
+  return {
+    target: target ? describeTab(target) : null,
+    active: active ? describeTab(active) : null,
+    missing: !followingActive && targetTabId !== null && target === null,
+    busy: agentBusy || targetChanging,
+  };
+}
 let conversationHistory: ChatMessage[] = [];
 /** 真正由用户发起的消息在 conversationHistory 中的索引（不含工具产生的 user 消息，例如截图） */
 let userTurnIndices: number[] = [];
+let userTurnTabs: (TargetTab | null)[] = [];
+let pendingTabSwitch = false;
 
 // MV3 service worker 会在空闲时被回收。若仅把对话历史放在内存里，SW 重启后历史
 // 就丢了——这会造成"UI 还显示着历史，但实际请求里却没有历史"的不一致。
@@ -48,11 +147,22 @@ const historyReady: Promise<void> = (async () => {
   try {
     const data = await chrome.storage.session.get(SESSION_KEY);
     const state = data[SESSION_KEY] as
-      | { conversationHistory?: ChatMessage[]; userTurnIndices?: number[] }
+      | {
+          conversationHistory?: ChatMessage[];
+          userTurnIndices?: number[];
+          userTurnTabs?: (TargetTab | null)[];
+          pendingTabSwitch?: boolean;
+        }
       | undefined;
     if (state) {
-      if (Array.isArray(state.conversationHistory)) conversationHistory = state.conversationHistory;
-      if (Array.isArray(state.userTurnIndices)) userTurnIndices = state.userTurnIndices;
+      if (Array.isArray(state.conversationHistory))
+        conversationHistory = state.conversationHistory;
+      if (Array.isArray(state.userTurnIndices))
+        userTurnIndices = state.userTurnIndices;
+      userTurnTabs = userTurnIndices.map(
+        (_, index) => state.userTurnTabs?.[index] ?? null,
+      );
+      pendingTabSwitch = state.pendingTabSwitch === true;
     }
   } catch {
     /* storage.session 不可用时忽略，退回纯内存行为 */
@@ -61,7 +171,14 @@ const historyReady: Promise<void> = (async () => {
 
 function persistHistory(): void {
   chrome.storage.session
-    .set({ [SESSION_KEY]: { conversationHistory, userTurnIndices } })
+    .set({
+      [SESSION_KEY]: {
+        conversationHistory,
+        userTurnIndices,
+        userTurnTabs,
+        pendingTabSwitch,
+      },
+    })
     .catch(() => {});
 }
 
@@ -80,13 +197,54 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 async function handleMessage(message: { type: string; payload?: unknown }) {
   switch (message.type) {
+    case "target:list": {
+      const tabs = await chrome.tabs.query({});
+      return {
+        tabs: tabs
+          .filter((tab) => tab.id !== undefined && tab.id >= 0)
+          .map(describeTab),
+      };
+    }
+    case "target:status":
+      return getTargetStatus(
+        (message.payload as { hasMessages?: boolean } | undefined)
+          ?.hasMessages === true,
+      );
+    case "target:switch": {
+      if (agentBusy || targetChanging || pickerBusy)
+        throw new Error("请先结束任务或元素选择，再切换标签页。");
+      targetChanging = true;
+      try {
+        await Promise.all([targetReady, historyReady, targetPinPending]);
+        const { tabId } = message.payload as { tabId: number };
+        if (!Number.isInteger(tabId) || tabId < 0)
+          throw new Error("无效的标签页。");
+        const tab = await chrome.tabs.get(tabId);
+        const previousTabId = targetTabId;
+        await cdp.attach(tab.id!);
+        await chrome.tabs.update(tab.id!, { active: true });
+        await chrome.windows.update(tab.windowId, { focused: true });
+        await selectTargetTab(tab, conversationHistory.length > 0);
+        await historyReady;
+        if (userTurnIndices.length > 0 && previousTabId !== tab.id) {
+          pendingTabSwitch = true;
+          persistHistory();
+        }
+        return { ...(await getTargetStatus()), busy: false };
+      } finally {
+        targetChanging = false;
+      }
+    }
     // ── CDP 相关 ──
     case "cdp:attach": {
-      const tab = await getActiveTab();
+      if (agentBusy) throw new Error("任务执行期间不能重新连接。");
+      const tab = await getTargetTab();
       await cdp.attach(tab.id!);
+      await selectTargetTab(tab);
       return { ok: true };
     }
     case "cdp:detach": {
+      if (agentBusy) throw new Error("请先停止任务，再断开连接。");
       await cdp.detach();
       return { ok: true };
     }
@@ -106,49 +264,98 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
 
     // ── Agent ──
     case "agent:start": {
-      const { userMessage, config } = message.payload as {
-        userMessage: string;
-        config: AgentConfig;
-      };
-      const tab = await getActiveTab();
-      // 始终重连到当前活动标签页
-      try { await cdp.detach(); } catch { /* 未连接时忽略 */ }
-      await cdp.attach(tab.id!);
-      await historyReady;
-      userTurnIndices.push(conversationHistory.length);
-      conversationHistory.push({ role: "user", content: userMessage });
-      persistHistory();
-      tools.configureShortRefs(config.enableShortRefs !== false);
-      tools.configureScreenshotScaling(
-        config.screenshotScaleMode ?? "claude46",
-        config.screenshotMaxLongEdge,
-        config.screenshotMaxPixels,
-      );
-      tools.configureCodeExecution({
-        enabled: config.enableCodeExecution !== false,
-        timeoutMs: typeof config.codeExecutionTimeoutMs === "number" ? config.codeExecutionTimeoutMs : 1000,
-        maxOutputChars: typeof config.codeExecutionMaxOutputChars === "number" ? config.codeExecutionMaxOutputChars : 6000,
-      });
-      agentLoop = new AgentLoop(tools, config, (event) => {
-        chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => {});
-      });
+      if (agentBusy || targetChanging || pickerBusy)
+        throw new Error("上一个任务或页面选择尚未结束，请稍后重试。");
+      agentBusy = true;
+      stopRequested = false;
       try {
-        const { text, messages } = await agentLoop.run(conversationHistory);
-        conversationHistory = messages;
+        await targetPinPending;
+        const { userMessage, config, messageId } = message.payload as {
+          userMessage: string;
+          config: AgentConfig;
+          messageId?: number;
+        };
+        const tab = await getTargetTab();
+        await cdp.attach(tab.id!);
+        await selectTargetTab(tab, true);
+        await historyReady;
+        const target = describeTab(tab);
+        const previousTarget = userTurnTabs[userTurnIndices.length - 1];
+        const firstTurn = userTurnIndices.length === 0;
+        const switched =
+          pendingTabSwitch ||
+          (previousTarget != null && previousTarget.id !== target.id);
+        const content =
+          firstTurn || switched
+            ? prependPageContext(userMessage, target, !firstTurn)
+            : userMessage;
+        userTurnIndices.push(conversationHistory.length);
+        userTurnTabs.push(target);
+        pendingTabSwitch = false;
+        conversationHistory.push({ role: "user", content });
         persistHistory();
-        agentLoop = null;
-        return { result: text };
-      } catch (err) {
-        // 任何未在 loop 内捕获的异常：明确告知 UI，否则前端 running 会卡住或静默回到 idle
-        // eslint-disable-next-line no-console
-        console.error("[NekoPilot] agentLoop.run threw:", err);
-        chrome.runtime.sendMessage({ type: "agent:event", payload: { type: "error", data: `Agent crashed: ${String(err)}` } }).catch(() => {});
-        chrome.runtime.sendMessage({ type: "agent:event", payload: { type: "done", data: "" } }).catch(() => {});
-        agentLoop = null;
-        throw err;
+        if (typeof messageId === "number") {
+          chrome.runtime
+            .sendMessage({
+              type: "target:bound",
+              payload: { messageId, target },
+            })
+            .catch(() => {});
+        }
+        tools.configureShortRefs(config.enableShortRefs !== false);
+        tools.configureScreenshotScaling(
+          config.screenshotScaleMode ?? "claude46",
+          config.screenshotMaxLongEdge,
+          config.screenshotMaxPixels,
+        );
+        tools.configureCodeExecution({
+          enabled: config.enableCodeExecution !== false,
+          timeoutMs:
+            typeof config.codeExecutionTimeoutMs === "number"
+              ? config.codeExecutionTimeoutMs
+              : 1000,
+          maxOutputChars:
+            typeof config.codeExecutionMaxOutputChars === "number"
+              ? config.codeExecutionMaxOutputChars
+              : 6000,
+        });
+        agentLoop = new AgentLoop(tools, config, (event) => {
+          chrome.runtime
+            .sendMessage({ type: "agent:event", payload: event })
+            .catch(() => {});
+        });
+        if (stopRequested) agentLoop.abort();
+        try {
+          const { text, messages } = await agentLoop.run(conversationHistory);
+          conversationHistory = messages;
+          persistHistory();
+          agentLoop = null;
+          return { result: text };
+        } catch (err) {
+          // 任何未在 loop 内捕获的异常：明确告知 UI，否则前端 running 会卡住或静默回到 idle
+          // eslint-disable-next-line no-console
+          console.error("[NekoPilot] agentLoop.run threw:", err);
+          chrome.runtime
+            .sendMessage({
+              type: "agent:event",
+              payload: { type: "error", data: `Agent crashed: ${String(err)}` },
+            })
+            .catch(() => {});
+          chrome.runtime
+            .sendMessage({
+              type: "agent:event",
+              payload: { type: "done", data: "" },
+            })
+            .catch(() => {});
+          agentLoop = null;
+          throw err;
+        }
+      } finally {
+        agentBusy = false;
       }
     }
     case "agent:stop": {
+      stopRequested = true;
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;
@@ -158,16 +365,32 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       return { ok: true };
     }
     case "agent:reset": {
-      conversationHistory = [];
-      userTurnIndices = [];
-      persistHistory();
-      if (agentLoop) {
-        agentLoop.abort();
-        agentLoop = null;
+      if (agentBusy || targetChanging || pickerBusy)
+        throw new Error("请先结束任务或页面选择，再新建对话。");
+      targetChanging = true;
+      // 清空前发出的状态请求不能在清空后重新固定目标。
+      targetRevision++;
+      try {
+        await Promise.all([targetReady, historyReady, targetPinPending]);
+        await chrome.storage.session.remove(["targetTabId", "targetTabPinned"]);
+        targetTabId = null;
+        targetPinned = false;
+        await cdp.detach();
+        conversationHistory = [];
+        userTurnIndices = [];
+        userTurnTabs = [];
+        pendingTabSwitch = false;
+        persistHistory();
+        if (agentLoop) {
+          agentLoop.abort();
+          agentLoop = null;
+        }
+        tools.removeClickMarker().catch(() => {});
+        tools.resetShortRefs();
+        return { ok: true };
+      } finally {
+        targetChanging = false;
       }
-      tools.removeClickMarker().catch(() => {});
-      tools.resetShortRefs();
-      return { ok: true };
     }
     case "agent:truncateBeforeUserTurn": {
       // 截断对话历史到第 turnIndex 个真用户消息之前（用于重试）
@@ -176,6 +399,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       const cutAt = userTurnIndices[turnIndex] ?? conversationHistory.length;
       conversationHistory = conversationHistory.slice(0, cutAt);
       userTurnIndices = userTurnIndices.slice(0, turnIndex);
+      userTurnTabs = userTurnTabs.slice(0, turnIndex);
       persistHistory();
       if (agentLoop) {
         agentLoop.abort();
@@ -210,12 +434,20 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
 
     // ── 元素选择器 ──
     case "pick:start": {
-      // 始终重连到当前活动标签页
-      const tab = await getActiveTab();
-      try { await cdp.detach(); } catch { /* 忽略 */ }
-      await cdp.attach(tab.id!);
-      // 注入元素选择器到页面
-      const pickScript = `
+      if (agentBusy || targetChanging || pickerBusy)
+        throw new Error("请先结束任务或页面选择，再选择页面元素。");
+      pickerBusy = true;
+      try {
+        const tab = await getTargetTab();
+        const active = await getActiveTab();
+        if (tab.id !== active.id)
+          throw new Error(
+            `请先切换到“${tab.title || tab.url || "操作标签页"}”`,
+          );
+        await cdp.attach(tab.id!);
+        await selectTargetTab(tab);
+        // 注入元素选择器到页面
+        const pickScript = `
         (function() {
           if (window.__nekopilotPicker) return;
           window.__nekopilotPicker = true;
@@ -295,35 +527,39 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           }
         })()
       `;
-      await cdp.send("Runtime.evaluate", {
-        expression: pickScript,
-        returnByValue: true,
-      });
+        await cdp.send("Runtime.evaluate", {
+          expression: pickScript,
+          returnByValue: true,
+        });
 
-      // 轮询等待用户选择（最多 30 秒）
-      for (let i = 0; i < 60; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        const check = await cdp.send<{ result: { value: unknown } }>(
-          "Runtime.evaluate",
-          {
-            expression: "window.__nekopilotPickResult",
-            returnByValue: true,
+        // 轮询等待用户选择（最多 30 秒）
+        for (let i = 0; i < 60; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          const check = await cdp.send<{ result: { value: unknown } }>(
+            "Runtime.evaluate",
+            {
+              expression: "window.__nekopilotPickResult",
+              returnByValue: true,
+            },
+          );
+          if (check.result.value !== undefined) {
+            // 清理
+            await cdp.send("Runtime.evaluate", {
+              expression:
+                "delete window.__nekopilotPickResult; delete window.__nekopilotPicker;",
+            });
+            return { element: check.result.value };
           }
-        );
-        if (check.result.value !== undefined) {
-          // 清理
-          await cdp.send("Runtime.evaluate", {
-            expression: "delete window.__nekopilotPickResult; delete window.__nekopilotPicker;",
-          });
-          return { element: check.result.value };
         }
+        // 超时 — 清理 overlay 和 highlight
+        await cdp.send("Runtime.evaluate", {
+          expression:
+            "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); delete window.__nekopilotPicker; delete window.__nekopilotPickResult; delete window.__nekopilotPickHover;",
+        });
+        return { element: null, timeout: true };
+      } finally {
+        pickerBusy = false;
       }
-      // 超时 — 清理 overlay 和 highlight
-      await cdp.send("Runtime.evaluate", {
-        expression:
-          "document.getElementById('__nekopilot-overlay')?.remove(); document.getElementById('__nekopilot-highlight')?.remove(); delete window.__nekopilotPicker; delete window.__nekopilotPickResult; delete window.__nekopilotPickHover;",
-      });
-      return { element: null, timeout: true };
     }
 
     case "pick:cancel": {
@@ -347,7 +583,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           {
             expression: "window.__nekopilotPickHover",
             returnByValue: true,
-          }
+          },
         );
         return { hover: check.result.value ?? null };
       } catch {

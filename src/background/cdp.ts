@@ -3,6 +3,12 @@
 export class CdpManager {
   private tabId: number | null = null;
 
+  constructor() {
+    chrome.debugger.onDetach.addListener((source) => {
+      if (source.tabId === this.tabId) this.tabId = null;
+    });
+  }
+
   get isAttached(): boolean {
     return this.tabId !== null;
   }
@@ -32,7 +38,7 @@ export class CdpManager {
 
   async send<T = unknown>(
     method: string,
-    params?: Record<string, unknown>
+    params?: Record<string, unknown>,
   ): Promise<T> {
     if (this.tabId === null) {
       throw new Error("CDP not attached. Call attach() first.");
@@ -40,7 +46,7 @@ export class CdpManager {
     const result = await chrome.debugger.sendCommand(
       { tabId: this.tabId },
       method,
-      params
+      params,
     );
     return result as T;
   }

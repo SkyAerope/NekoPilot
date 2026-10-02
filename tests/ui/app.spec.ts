@@ -1,11 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import type { TargetTab, TargetTabStatus } from "../../src/shared/target-tab";
 
 type AgentEvent = { type: string; data: unknown };
 type Harness = {
   storage: Record<string, unknown>;
   messages: { type: string; payload?: Record<string, unknown> }[];
   emit: (event: AgentEvent) => void;
+  bindTarget: (messageId: number, target: TargetTab) => void;
+  targetStatus: TargetTabStatus;
+  switchError?: string;
+  statusError?: string;
+  reloadCount: number;
+  followingActive: boolean;
+  tabs: TargetTab[] | null;
 };
 
 declare global {
@@ -42,9 +50,23 @@ async function installHarness(
     const harness: Harness = {
       storage,
       messages,
+      statusError: initialStorage.statusError as string | undefined,
+      reloadCount: 0,
+      followingActive: initialStorage.followingActive === true,
+      tabs: (initialStorage.tabs as TargetTab[]) || null,
+      targetStatus: (initialStorage.targetStatus as TargetTabStatus) || {
+        target: { id: 1, title: "示例页面", url: "https://example.invalid" },
+        active: { id: 1, title: "示例页面", url: "https://example.invalid" },
+        missing: false,
+        busy: false,
+      },
       emit: (event) =>
         messageListeners.forEach((listener) =>
           listener({ type: "agent:event", payload: event }),
+        ),
+      bindTarget: (messageId, target) =>
+        messageListeners.forEach((listener) =>
+          listener({ type: "target:bound", payload: { messageId, target } }),
         ),
     };
     const chromeMock = {
@@ -57,27 +79,88 @@ async function installHarness(
             messageListeners.delete(listener),
         },
         openOptionsPage: () => {},
+        reload: () => {
+          harness.reloadCount++;
+        },
         sendMessage: (
           message: Harness["messages"][number],
           callback: (result: unknown) => void,
         ) => {
           messages.push(message);
+          if (
+            message.type === "agent:start" &&
+            typeof message.payload?.messageId === "number" &&
+            harness.targetStatus.target
+          ) {
+            harness.bindTarget(
+              message.payload.messageId,
+              harness.targetStatus.target,
+            );
+          }
+          if (message.type === "target:status" && harness.followingActive) {
+            harness.targetStatus.target = harness.targetStatus.active;
+            if (message.payload?.hasMessages) harness.followingActive = false;
+          }
+          if (message.type === "agent:reset") {
+            harness.followingActive = true;
+            harness.targetStatus.target = harness.targetStatus.active;
+          }
+          if (message.type === "target:status" && harness.statusError) {
+            queueMicrotask(() => callback({ error: harness.statusError }));
+            return;
+          }
+          if (message.type === "target:switch") {
+            if (harness.switchError) {
+              queueMicrotask(() => callback({ error: harness.switchError }));
+              return;
+            }
+            const selected =
+              harness.tabs?.find((tab) => tab.id === message.payload?.tabId) ||
+              harness.targetStatus.active;
+            harness.targetStatus.target = selected;
+            harness.targetStatus.active = selected;
+          }
           const result =
-            message.type === "settings:get"
-              ? storage.settings
-              : message.type === "cdp:status"
-                ? { attached: false }
-                : message.type === "pick:start"
-                  ? {
-                      element: {
-                        tag: "button",
-                        selector: "#submit",
-                        text: "提交",
-                        rect: { x: 10, y: 20, w: 80, h: 30 },
-                      },
-                    }
-                  : {};
-          queueMicrotask(() => callback(result));
+            message.type === "target:list"
+              ? {
+                  tabs:
+                    harness.tabs ||
+                    Array.from(
+                      new Map(
+                        [
+                          harness.targetStatus.target,
+                          harness.targetStatus.active,
+                        ]
+                          .filter((tab): tab is TargetTab => tab !== null)
+                          .map((tab) => [tab.id, tab]),
+                      ).values(),
+                    ),
+                }
+              : message.type === "target:status" ||
+                  message.type === "target:switch"
+                ? harness.targetStatus
+                : message.type === "settings:get"
+                  ? storage.settings
+                  : message.type === "cdp:status"
+                    ? { attached: false }
+                    : message.type === "pick:start"
+                      ? {
+                          element: {
+                            tag: "button",
+                            selector: "#submit",
+                            text: "提交",
+                            rect: { x: 10, y: 20, w: 80, h: 30 },
+                          },
+                        }
+                      : {};
+          if (message.type === "target:list" && initialStorage.tabListDelay) {
+            window.setTimeout(
+              () => callback(structuredClone(result)),
+              Number(initialStorage.tabListDelay),
+            );
+          } else {
+            queueMicrotask(() => callback(structuredClone(result)));
+          }
         },
       },
       storage: {
@@ -141,6 +224,465 @@ async function expectNoOverflow(page: Page) {
     ),
   ).toBe(true);
 }
+
+test("输入区显示图标操作与标签页纸片，窄侧栏不溢出", async ({ page }) => {
+  await installHarness(page, {
+    autoMode: true,
+    targetStatus: {
+      target: {
+        id: 1,
+        title: "这是一个很长的操作标签页标题，用来检查单行截断和窄侧栏布局",
+        url: "https://example.invalid",
+        favIconUrl: screenshotData.replace(/^/, "data:image/png;base64,"),
+      },
+      active: {
+        id: 1,
+        title: "这是一个很长的操作标签页标题，用来检查单行截断和窄侧栏布局",
+        url: "https://example.invalid",
+      },
+      missing: false,
+      busy: false,
+    },
+  });
+  await page.setViewportSize({ width: 320, height: 600 });
+  await page.goto("/sidepanel.html");
+  await expect(page.locator("header")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /CDP/ })).toHaveCount(0);
+  const mode = page.getByRole("button", { name: "自动模式", exact: true });
+  await expect(mode).toHaveText("");
+  await mode.hover();
+  await expect(page.getByRole("tooltip")).toHaveText("切换审核模式");
+  await mode.click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "执行前询问" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("menuitemradio", { name: "自动执行" })
+      .locator(".lucide-check"),
+  ).toHaveCount(1);
+  await expect(page.locator(".lucide-circle")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menuitemradio")).toHaveCount(0);
+  await expect(
+    page.getByText(/Auto mode|Ask before acting|Auto 模式/),
+  ).toHaveCount(0);
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  await expect(chip.locator("img")).toBeVisible();
+  expect(
+    await chip
+      .locator("span.truncate")
+      .evaluate((element) => element.scrollWidth > element.clientWidth),
+  ).toBe(true);
+  const create = await page
+    .getByRole("button", { name: "新建对话" })
+    .boundingBox();
+  const modeBox = await mode.boundingBox();
+  const picker = await page
+    .getByRole("button", { name: "选择页面元素" })
+    .boundingBox();
+  const settings = await page
+    .getByRole("button", { name: "设置", exact: true })
+    .boundingBox();
+  expect(create!.x).toBeLessThan(modeBox!.x);
+  expect(modeBox!.x).toBeLessThan(picker!.x);
+  expect(settings!.y).toBeGreaterThan(picker!.y);
+  await chip.click();
+  await expect(page.getByRole("option")).toHaveAttribute(
+    "data-target-selected",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await expectNoOverflow(page);
+  await page.screenshot({ path: "test-results/composer-target-tab.png" });
+});
+
+test("旧后台提示重新加载，恢复状态后自动清除提示", async ({ page }) => {
+  await installHarness(page, {
+    statusError: "Error: Unknown message type: target:status",
+  });
+  await page.goto("/sidepanel.html");
+  await expect(page.getByRole("alert")).toContainText(
+    "扩展后台仍是旧版本，请重新加载扩展。",
+  );
+  await expect(
+    page.getByText("Error: Error: Unknown message type: target:status"),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "任务内容" }).fill("执行任务");
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "重新加载扩展", exact: true }).click();
+  expect(await page.evaluate(() => window.__harness.reloadCount)).toBe(1);
+  await page.evaluate(() => {
+    window.__harness.statusError = undefined;
+  });
+  await expect(
+    page.getByRole("button", { name: "操作标签页", exact: true }),
+  ).toHaveText("示例页面");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "发送消息", exact: true }),
+  ).toBeEnabled();
+});
+
+test("用户气泡下方保存标签页纸片，图标加载时占位，切换与恢复不改旧纸片", async ({
+  page,
+}) => {
+  const tabs: TargetTab[] = [
+    {
+      id: 1,
+      title: "原页面 A",
+      url: "https://example.invalid/a",
+      favIconUrl: "https://example.invalid/tab-icon.png",
+    },
+    { id: 2, title: "新页面 B", url: "https://example.invalid/b" },
+  ];
+  let releaseIcon!: () => void;
+  const iconReady = new Promise<void>((resolve) => {
+    releaseIcon = resolve;
+  });
+  const icon = await readFile("dist/icons/icon-16.png");
+  await page.route("https://example.invalid/tab-icon.png", async (route) => {
+    await iconReady;
+    await route.fulfill({ contentType: "image/png", body: icon });
+  });
+  await installHarness(page, {
+    tabs,
+    targetStatus: {
+      target: tabs[0],
+      active: tabs[0],
+      missing: false,
+      busy: false,
+    },
+  });
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto("/sidepanel.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("textbox", { name: "任务内容" }).fill("检查页面 A");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  const papers = page.locator('[data-slot="message-target-tab"]');
+  await expect(papers).toHaveText(["原页面 A"]);
+  await expect(papers.first().locator(".lucide-link")).toBeVisible();
+  const bubble = page.locator(".is-user > div").first();
+  await expect(bubble).toHaveText("检查页面 A");
+  expect(await bubble.locator('[data-slot="message-target-tab"]').count()).toBe(
+    0,
+  );
+  const bubbleBox = await bubble.boundingBox();
+  const paperBox = await papers.first().boundingBox();
+  expect(paperBox!.y).toBeGreaterThanOrEqual(bubbleBox!.y + bubbleBox!.height);
+  releaseIcon();
+  await expect(papers.first().locator(".lucide-link")).toHaveCount(0);
+  await expect(papers.first().locator("img")).toBeVisible();
+  await emit(page, "done", "");
+  await page.getByRole("button", { name: "操作标签页", exact: true }).click();
+  await page.getByRole("option", { name: "新页面 B", exact: true }).click();
+  await expect(papers).toHaveText(["原页面 A"]);
+  await page.getByRole("textbox", { name: "任务内容" }).fill("检查页面 B");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(papers).toHaveText(["原页面 A", "新页面 B"]);
+  await expect(papers.last().locator(".lucide-link")).toBeVisible();
+  await expectNoOverflow(page);
+  await page.screenshot({ path: "test-results/user-tab-chips.png" });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window.__harness.storage.chatLogs as
+              { targetTab?: TargetTab }[] | undefined
+          )?.filter((entry) => entry.targetTab).length,
+      ),
+    )
+    .toBe(2);
+  const saved = await page.evaluate(() => window.__harness.storage.chatLogs);
+  const reopened = await page.context().newPage();
+  await installHarness(reopened, { chatLogs: saved });
+  await reopened.goto("/sidepanel.html");
+  await expect(reopened.locator('[data-slot="message-target-tab"]')).toHaveText(
+    ["原页面 A", "新页面 B"],
+  );
+  await reopened.close();
+});
+
+test("后台绑定修正气泡页面快照，失败图标显示链接占位", async ({ page }) => {
+  await page.route("https://example.invalid/missing-icon.png", (route) =>
+    route.fulfill({ status: 404 }),
+  );
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await page.getByRole("textbox", { name: "任务内容" }).fill("检查实际页面");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await page.evaluate(() => {
+    const messageId = window.__harness.messages.find(
+      (message) => message.type === "agent:start",
+    )!.payload!.messageId as number;
+    window.__harness.bindTarget(messageId, {
+      id: 3,
+      title: "实际连接页面",
+      url: "https://example.invalid/actual",
+      favIconUrl: "https://example.invalid/missing-icon.png",
+    });
+  });
+  const paper = page.locator('[data-slot="message-target-tab"]');
+  await expect(paper).toHaveText("实际连接页面");
+  await expect(paper.locator("img")).toHaveCount(0);
+  await expect(paper.locator(".lucide-link")).toBeVisible();
+});
+
+test("标签页菜单置顶目标、显示四个最近页，并按标题链接搜索全部标签页", async ({
+  page,
+}) => {
+  const tabs: TargetTab[] = Array.from({ length: 7 }, (_, index) => ({
+    id: index + 1,
+    title: index === 0 ? "当前操作页" : `页面 ${index + 1}`,
+    url: `https://example.invalid/tab-${index + 1}/${"long-path/".repeat(8)}`,
+    lastAccessed: index * 100,
+  }));
+  await installHarness(page, {
+    tabs,
+    targetStatus: {
+      target: tabs[0],
+      active: tabs[0],
+      busy: false,
+      missing: false,
+    },
+  });
+  await page.setViewportSize({ width: 320, height: 600 });
+  await page.goto("/sidepanel.html");
+  expect(
+    await page.evaluate(
+      () =>
+        window.__harness.messages.filter(
+          (message) => message.type === "target:list",
+        ).length,
+    ),
+  ).toBe(0);
+  await page.getByRole("button", { name: "操作标签页", exact: true }).click();
+  const options = page.getByRole("option");
+  await expect(options).toHaveCount(5);
+  expect(
+    await options.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("aria-label")),
+    ),
+  ).toEqual(["当前操作页", "页面 7", "页面 6", "页面 5", "页面 4"]);
+  await expect(
+    options.first().locator('[data-slot="target-check"]'),
+  ).toBeVisible();
+  await expect(
+    options.nth(1).locator('[data-slot="target-check"]'),
+  ).toHaveCount(0);
+  expect(
+    await options
+      .first()
+      .locator("p")
+      .evaluate((element) => element.scrollWidth > element.clientWidth),
+  ).toBe(true);
+  await expect(page.getByText("切换标签页", { exact: true })).toHaveCount(0);
+  await expectNoOverflow(page);
+  await page.screenshot({ path: "test-results/tab-selector-recent.png" });
+  const search = page.getByRole("combobox", { name: "搜索标签页" });
+  await expect(search).toBeFocused();
+  await search.fill("页面 2");
+  await expect(options).toHaveCount(1);
+  await expect(options).toHaveAttribute("aria-label", "页面 2");
+  await search.fill("TAB-3");
+  await expect(options).toHaveCount(1);
+  await expect(options).toHaveAttribute("aria-label", "页面 3");
+  await search.fill("不存在的页面");
+  await expect(page.getByText("没有匹配的标签页")).toBeVisible();
+  await search.fill("tab-2/");
+  await search.press("ArrowDown");
+  await search.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "操作标签页", exact: true }),
+  ).toHaveText("页面 2");
+  expect(
+    await page.evaluate(
+      () =>
+        window.__harness.messages.filter(
+          (message) => message.type === "target:list",
+        ).length,
+    ),
+  ).toBe(1);
+});
+
+test("标签页菜单刷新时不闪现加载提示或改变高度，搜索长列表仍可滚动", async ({
+  page,
+}) => {
+  const tabs: TargetTab[] = Array.from({ length: 12 }, (_, index) => ({
+    id: index + 1,
+    title: `页面 ${index + 1}`,
+    url: `https://example.invalid/tab-${index + 1}`,
+    lastAccessed: index * 100,
+  }));
+  await installHarness(page, {
+    tabs,
+    tabListDelay: 300,
+    targetStatus: {
+      target: tabs[0],
+      active: tabs[0],
+      busy: false,
+      missing: false,
+    },
+  });
+  await page.setViewportSize({ width: 320, height: 600 });
+  await page.goto("/sidepanel.html");
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  const list = page.locator('[data-slot="command-list"]');
+  const menu = page.getByRole("dialog", { name: "选择操作标签页" });
+  const overflow = () =>
+    list.evaluate((element) => ({
+      height: element.clientHeight,
+      contentHeight: element.scrollHeight,
+      overflowing: element.scrollHeight > element.clientHeight,
+    }));
+  await chip.click();
+  await expect(list).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByText("正在获取标签页…")).toHaveCount(0);
+  expect((await overflow()).overflowing).toBe(false);
+  await expect(page.getByRole("option")).toHaveCount(5);
+  await expect(list).toHaveAttribute("aria-busy", "false");
+  expect((await overflow()).overflowing).toBe(false);
+  const height = await menu.evaluate((element) => element.clientHeight);
+  await page.keyboard.press("Escape");
+  await chip.click();
+  await expect(list).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByText("正在获取标签页…")).toHaveCount(0);
+  expect(await menu.evaluate((element) => element.clientHeight)).toBe(height);
+  expect(await overflow()).toMatchObject({ overflowing: false });
+  await expect(list).toHaveAttribute("aria-busy", "false");
+  expect(await menu.evaluate((element) => element.clientHeight)).toBe(height);
+  expect((await overflow()).overflowing).toBe(false);
+  await page.getByRole("combobox", { name: "搜索标签页" }).fill("tab-");
+  await expect(page.getByRole("option")).toHaveCount(12);
+  expect((await overflow()).overflowing).toBe(true);
+  await list.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(
+    0,
+  );
+  await expectNoOverflow(page);
+});
+
+test("空对话切页更新纸片并清理元素引用，首条消息后保持目标", async ({
+  page,
+}) => {
+  await installHarness(page, { followingActive: true });
+  await page.goto("/sidepanel.html");
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  await expect(chip).toHaveText("示例页面");
+  await page.getByRole("button", { name: "选择页面元素" }).click();
+  await expect(
+    page.getByRole("button", { name: /移除 <button> 提交/ }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    window.__harness.targetStatus.active = {
+      id: 2,
+      title: "页面 B",
+      url: "https://example.invalid/b",
+    };
+  });
+  await expect(chip).toHaveText("页面 B");
+  await expect(
+    page.getByRole("button", { name: /移除 <button> 提交/ }),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "任务内容" }).fill("开始任务");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.__harness.followingActive))
+    .toBe(false);
+  await page.evaluate(() => {
+    window.__harness.targetStatus.active = {
+      id: 1,
+      title: "页面 A",
+      url: "https://example.invalid/a",
+    };
+  });
+  await chip.click();
+  await expect(
+    page.getByRole("option", { name: "页面 A", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(chip).toHaveText("页面 B");
+  await expect(
+    page.getByRole("button", { name: "选择页面元素" }),
+  ).toBeDisabled();
+});
+
+test("标签页不一致时禁用元素选择，切换后更新纸片与选中态", async ({ page }) => {
+  const title = "这是一个超过二十个字符的操作标签页标题需要截断显示";
+  await installHarness(page, {
+    targetStatus: {
+      target: { id: 1, title, url: "https://example.invalid/a" },
+      active: { id: 2, title: "当前页面 B", url: "https://example.invalid/b" },
+      missing: false,
+      busy: false,
+    },
+  });
+  await page.goto("/sidepanel.html");
+  const picker = page.getByRole("button", { name: "选择页面元素" });
+  await expect(picker).toBeDisabled();
+  await picker.locator("..").hover();
+  await expect(page.getByRole("tooltip")).toHaveText(
+    `选择页面元素\n请先切换到“${Array.from(title).slice(0, 20).join("")}...”`,
+  );
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  await expect(chip.locator("img")).toHaveCount(0);
+  await chip.click();
+  await expect(
+    page.getByRole("combobox", { name: "搜索标签页" }),
+  ).toBeVisible();
+  const current = page.getByRole("option", { name: "当前页面 B", exact: true });
+  await expect(current).toHaveAttribute("data-target-selected", "false");
+  await current.click();
+  await expect(chip).toHaveText("当前页面 B");
+  await expect(picker).toBeEnabled();
+  await chip.click();
+  await expect(
+    page.getByRole("option", { name: "当前页面 B", exact: true }),
+  ).toHaveAttribute("data-target-selected", "true");
+  expect(
+    await page.evaluate(() =>
+      window.__harness.messages.filter(
+        (message) => message.type === "target:switch",
+      ),
+    ),
+  ).toEqual([{ type: "target:switch", payload: { tabId: 2 } }]);
+});
+
+test("切换失败保留操作页，运行期间禁止切换和元素选择", async ({ page }) => {
+  await installHarness(page, {
+    targetStatus: {
+      target: { id: 1, title: "操作页面 A", url: "https://example.invalid/a" },
+      active: { id: 2, title: "当前页面 B", url: "https://example.invalid/b" },
+      missing: false,
+      busy: false,
+    },
+  });
+  await page.goto("/sidepanel.html");
+  await page.evaluate(() => {
+    window.__harness.switchError = "连接标签页失败";
+  });
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  await chip.click();
+  await page.getByRole("option", { name: "当前页面 B", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(/连接标签页失败/);
+  await expect(chip).toHaveText("操作页面 A");
+  await page.getByRole("textbox", { name: "任务内容" }).fill("执行任务");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await chip.click();
+  await expect(page.getByText("请先停止任务，再切换标签页")).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: "当前页面 B", exact: true }),
+  ).toHaveAttribute("data-disabled", "true");
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "选择页面元素" }),
+  ).toBeDisabled();
+});
 
 test("长对话仅在聊天区滚动，整页不会出现底部空白", async ({ page }) => {
   await installHarness(page, {

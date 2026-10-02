@@ -2,21 +2,16 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Bot,
   Settings,
-  Link,
-  Unlink,
   MessageSquarePlus,
   Copy,
   Pencil,
   RotateCcw,
-  ChevronDown,
   FastForward,
   Hand,
   MousePointer2,
   Paperclip,
-  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Tooltip,
   TooltipContent,
@@ -60,14 +55,40 @@ import {
 } from "./model";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
+import type { TargetTabBinding, TargetTabStatus } from "../shared/target-tab";
+import { TabSelector } from "./tab-selector";
+import { TabIcon } from "./tab-icon";
 
 let logIdCounter = 0;
+
+function getErrorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(
+    /^(?:Error:\s*)+/,
+    "",
+  );
+}
 
 export default function App() {
   const [input, setInput] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
-  const [attached, setAttached] = useState(false);
+  const [targetStatus, setTargetStatus] = useState<TargetTabStatus | null>(
+    null,
+  );
+  const [targetError, setTargetError] = useState<string | null>(null);
+  const [targetStatusError, setTargetStatusError] = useState<{
+    message: string;
+    needsReload: boolean;
+  } | null>(null);
+  const [switchingTab, setSwitchingTab] = useState(false);
+  const targetMismatch = Boolean(
+    targetStatus?.target && targetStatus.target.id !== targetStatus.active?.id,
+  );
+  const targetTitle = targetStatus?.target?.title || "";
+  const truncatedTargetTitle =
+    Array.from(targetTitle).length > 20
+      ? `${Array.from(targetTitle).slice(0, 20).join("")}...`
+      : targetTitle;
   const [autoMode, setAutoMode] = useState(false);
   const [picking, setPicking] = useState(false);
   const [pickHover, setPickHover] = useState<{
@@ -153,9 +174,23 @@ export default function App() {
 
   // 监听 agent 事件
   useEffect(() => {
-    const listener = (message: { type: string; payload?: AgentEvent }) => {
+    const listener = (message: {
+      type: string;
+      payload?: AgentEvent | TargetTabBinding;
+    }) => {
+      if (message.type === "target:bound" && message.payload) {
+        const binding = message.payload as TargetTabBinding;
+        setLogs((previous) =>
+          previous.map((entry) =>
+            entry.id === binding.messageId
+              ? { ...entry, targetTab: binding.target }
+              : entry,
+          ),
+        );
+        return;
+      }
       if (message.type !== "agent:event" || !message.payload) return;
-      const event = message.payload;
+      const event = message.payload as AgentEvent;
 
       if (event.type === "done") {
         setRunning(false);
@@ -515,12 +550,49 @@ export default function App() {
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
-  // 检查连接状态
+  const hasMessages = logs.some(
+    (log) => log.type === "user" || log.type === "assistant",
+  );
+  const refreshTargetStatus = useCallback(async () => {
+    try {
+      setTargetStatus(
+        await sendMessage<TargetTabStatus>("target:status", {
+          hasMessages: logsLoadedRef.current && hasMessages,
+        }),
+      );
+      setTargetStatusError(null);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const needsReload = message === "Unknown message type: target:status";
+      setTargetStatus(null);
+      setTargetStatusError({
+        message: needsReload ? "扩展后台仍是旧版本，请重新加载扩展。" : message,
+        needsReload,
+      });
+    }
+  }, [hasMessages]);
+
   useEffect(() => {
-    sendMessage<{ attached: boolean }>("cdp:status").then((res) =>
-      setAttached(res.attached),
-    );
-  }, []);
+    setPickedElements([]);
+  }, [targetStatus?.target?.id]);
+
+  // 空对话跟随活动页；出现消息后，后台保持操作目标。
+  useEffect(() => {
+    void refreshTargetStatus();
+    const refresh = () => void refreshTargetStatus();
+    chrome.tabs?.onActivated?.addListener(refresh);
+    chrome.tabs?.onUpdated?.addListener(refresh);
+    chrome.tabs?.onRemoved?.addListener(refresh);
+    chrome.windows?.onFocusChanged?.addListener(refresh);
+    const timer = window.setInterval(() => void refreshTargetStatus(), 1000);
+    return () => {
+      window.clearInterval(timer);
+      chrome.tabs?.onActivated?.removeListener(refresh);
+      chrome.tabs?.onUpdated?.removeListener(refresh);
+      chrome.tabs?.onRemoved?.removeListener(refresh);
+      chrome.windows?.onFocusChanged?.removeListener(refresh);
+    };
+  }, [refreshTargetStatus]);
 
   const setAutoModeAndPersist = useCallback((value: boolean) => {
     setAutoMode(value);
@@ -531,19 +603,38 @@ export default function App() {
     );
   }, []);
 
-  const handleAttach = useCallback(async () => {
-    if (attached) {
-      await sendMessage("cdp:detach");
-      setAttached(false);
-    } else {
-      await sendMessage("cdp:attach");
-      setAttached(true);
-    }
-  }, [attached]);
+  const handleSwitchTab = useCallback(
+    async (tabId: number) => {
+      setSwitchingTab(true);
+      setTargetError(null);
+      try {
+        setTargetStatus(
+          await sendMessage<TargetTabStatus>("target:switch", {
+            tabId: Number(tabId),
+          }),
+        );
+        setPickedElements([]);
+      } catch (error) {
+        setTargetError(getErrorMessage(error));
+        void refreshTargetStatus();
+      } finally {
+        setSwitchingTab(false);
+      }
+    },
+    [refreshTargetStatus],
+  );
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if ((!text && pickedElements.length === 0) || running) return;
+    if (
+      (!text && pickedElements.length === 0) ||
+      running ||
+      switchingTab ||
+      targetStatus?.busy ||
+      targetStatusError?.needsReload ||
+      picking
+    )
+      return;
 
     const elementContext = pickedElements
       .map(
@@ -553,6 +644,7 @@ export default function App() {
       .join("\n");
     const attachmentNames = attachments.map((a) => a.name);
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
+    const messageId = ++logIdCounter;
 
     setInput("");
     setPickedElements([]);
@@ -560,7 +652,7 @@ export default function App() {
     setLogs((prev) => [
       ...prev,
       {
-        id: ++logIdCounter,
+        id: messageId,
         type: "user",
         content:
           text +
@@ -568,6 +660,7 @@ export default function App() {
             ? `\n[附件: ${attachmentNames.join(", ")}]`
             : ""),
         timestamp: Date.now(),
+        targetTab: targetStatus?.target ?? undefined,
         pickedElements:
           pickedElements.length > 0 ? [...pickedElements] : undefined,
       },
@@ -608,6 +701,7 @@ export default function App() {
     setRunning(true);
     try {
       await sendMessage("agent:start", {
+        messageId,
         userMessage: fullMessage,
         config: {
           apiKey: settings.apiKey,
@@ -666,19 +760,42 @@ export default function App() {
       ]);
       setRunning(false);
     }
-  }, [input, running, autoMode, pickedElements, attachments]);
+  }, [
+    input,
+    running,
+    autoMode,
+    pickedElements,
+    attachments,
+    switchingTab,
+    targetStatus?.busy,
+    targetStatus?.target,
+    targetStatusError?.needsReload,
+    picking,
+  ]);
 
   const handleStop = useCallback(async () => {
     await sendMessage("agent:stop");
     setRunning(false);
   }, []);
 
-  const handleClearChat = useCallback(() => {
+  const handleClearChat = useCallback(async () => {
+    try {
+      await sendMessage("agent:reset");
+    } catch (error) {
+      setTargetError(getErrorMessage(error));
+      return;
+    }
     setLogs([]);
     setPromptTokens(null);
     setCacheInfo(null);
+    setPickedElements([]);
+    setTargetError(null);
     chrome.storage.local.remove(["chatLogs", "chatMeta"]);
-    sendMessage("agent:reset").catch(() => {});
+    setTargetStatus(
+      await sendMessage<TargetTabStatus>("target:status", {
+        hasMessages: false,
+      }),
+    );
   }, []);
 
   const handleApprove = useCallback((toolCallId: string) => {
@@ -854,11 +971,13 @@ export default function App() {
         ...userEntry,
         id: ++logIdCounter,
         timestamp: Date.now(),
+        targetTab: targetStatus?.target ?? undefined,
       };
       setLogs((prev) => [...prev, replayedEntry]);
       setRunning(true);
       try {
         await sendMessage("agent:start", {
+          messageId: replayedEntry.id,
           userMessage: fullMessage,
           config: {
             apiKey: settings.apiKey,
@@ -919,7 +1038,7 @@ export default function App() {
         setRunning(false);
       }
     },
-    [logs, running, autoMode],
+    [logs, running, autoMode, targetStatus?.target],
   );
 
   const handleAddFiles = useCallback((files: File[]) => {
@@ -993,29 +1112,6 @@ export default function App() {
 
   return (
     <div className="flex h-dvh min-w-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
-        <Bot className="size-5 text-primary" />
-        <h1 className="flex-1 text-base font-semibold">NekoPilot</h1>
-        <IconAction label="新建对话" onClick={handleClearChat}>
-          <MessageSquarePlus />
-        </IconAction>
-        <IconAction
-          label={attached ? "断开 CDP" : "连接 CDP"}
-          onClick={handleAttach}
-        >
-          {attached ? (
-            <Link className="text-emerald-500" />
-          ) : (
-            <Unlink className="text-muted-foreground" />
-          )}
-        </IconAction>
-        <IconAction
-          label="设置"
-          onClick={() => chrome.runtime.openOptionsPage()}
-        >
-          <Settings />
-        </IconAction>
-      </header>
       <div
         ref={logsScroll.scrollRef}
         onScroll={logsScroll.onScroll}
@@ -1033,7 +1129,7 @@ export default function App() {
             <p className="max-w-64 text-xs leading-relaxed">
               输入任务，或选择网页元素作为上下文。
               <br />
-              Ask 模式下，操作执行前会等待你的批准。
+              询问模式下，操作执行前会等待你的批准。
             </p>
           </div>
         )}
@@ -1057,6 +1153,17 @@ export default function App() {
                     </div>
                   )}
                 </MessageContent>
+                {entry.targetTab && (
+                  <div
+                    data-slot="message-target-tab"
+                    className="flex max-w-full self-end"
+                  >
+                    <ReferenceChip
+                      label={entry.targetTab.title}
+                      icon={<TabIcon tab={entry.targetTab} />}
+                    />
+                  </div>
+                )}
                 <MessageActions className="self-end">
                   <MessageAction
                     tooltip="复制"
@@ -1168,14 +1275,6 @@ export default function App() {
         <div ref={logsEndRef} />
       </div>
       <footer className="shrink-0 space-y-2 px-3 pb-3">
-        {autoMode && (
-          <Alert className="border-amber-500/40 bg-amber-500/10 py-2 text-amber-700 dark:text-amber-300">
-            <AlertCircle className="size-4" />
-            <AlertDescription className="text-xs">
-              Auto 模式：直接执行所有操作，不会询问确认。
-            </AlertDescription>
-          </Alert>
-        )}
         <PromptInput
           onSubmit={() => handleSend()}
           onFilesAdded={handleAddFiles}
@@ -1232,35 +1331,54 @@ export default function App() {
             />
           </PromptInputBody>
           <PromptInputFooter className="flex-wrap gap-y-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <PromptInputButton className="max-w-full text-xs">
-                  {autoMode ? <FastForward /> : <Hand />}
-                  <span>{autoMode ? "Auto mode" : "Ask before acting"}</span>
-                  <ChevronDown className="size-3" />
-                </PromptInputButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start">
-                <DropdownMenuRadioGroup
-                  value={autoMode ? "auto" : "ask"}
-                  onValueChange={(value) =>
-                    setAutoModeAndPersist(value === "auto")
-                  }
-                >
-                  <DropdownMenuRadioItem
-                    value="auto"
-                    className="cursor-pointer"
+            <PromptInputTools>
+              <IconAction
+                label="新建对话"
+                onClick={handleClearChat}
+                disabled={
+                  running || targetStatus?.busy || switchingTab || picking
+                }
+              >
+                <MessageSquarePlus />
+              </IconAction>
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <PromptInputButton
+                        aria-label={autoMode ? "自动模式" : "询问模式"}
+                      >
+                        {autoMode ? <FastForward /> : <Hand />}
+                      </PromptInputButton>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>切换审核模式</TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent side="top" align="start">
+                  <DropdownMenuRadioGroup
+                    value={autoMode ? "auto" : "ask"}
+                    onValueChange={(value) =>
+                      setAutoModeAndPersist(value === "auto")
+                    }
                   >
-                    <FastForward className="size-4" />
-                    Auto mode
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="ask" className="cursor-pointer">
-                    <Hand className="size-4" />
-                    Ask before acting
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                    <DropdownMenuRadioItem
+                      value="auto"
+                      className="cursor-pointer"
+                    >
+                      <FastForward className="size-4" />
+                      自动执行
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem
+                      value="ask"
+                      className="cursor-pointer"
+                    >
+                      <Hand className="size-4" />
+                      执行前询问
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </PromptInputTools>
             <PromptInputTools className="ml-auto">
               {promptTokens !== null && (
                 <Tooltip>
@@ -1293,15 +1411,33 @@ export default function App() {
               )}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <PromptInputButton
-                    aria-label="选择页面元素"
-                    onClick={handlePickElement}
-                    disabled={picking}
+                  <span
+                    className="inline-flex"
+                    tabIndex={targetMismatch ? 0 : undefined}
                   >
-                    <MousePointer2 className={cn(picking && "text-primary")} />
-                  </PromptInputButton>
+                    <PromptInputButton
+                      aria-label="选择页面元素"
+                      onClick={handlePickElement}
+                      disabled={
+                        !targetStatus?.target ||
+                        targetMismatch ||
+                        picking ||
+                        running ||
+                        targetStatus?.busy ||
+                        switchingTab
+                      }
+                    >
+                      <MousePointer2
+                        className={cn(picking && "text-primary")}
+                      />
+                    </PromptInputButton>
+                  </span>
                 </TooltipTrigger>
-                <TooltipContent>选择页面元素</TooltipContent>
+                <TooltipContent className="whitespace-pre-line">
+                  {targetMismatch
+                    ? `选择页面元素\n请先切换到“${truncatedTargetTitle}”`
+                    : "选择页面元素"}
+                </TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1319,13 +1455,61 @@ export default function App() {
                 status={running ? "streaming" : "ready"}
                 aria-label={running ? "停止" : "发送消息"}
                 disabled={
-                  !running && !input.trim() && pickedElements.length === 0
+                  !running &&
+                  (picking ||
+                    switchingTab ||
+                    targetStatusError?.needsReload ||
+                    targetStatus?.busy ||
+                    (!input.trim() && pickedElements.length === 0))
                 }
                 onClick={running ? handleStop : undefined}
               />
             </PromptInputTools>
           </PromptInputFooter>
         </PromptInput>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <TabSelector
+            status={targetStatus}
+            running={running}
+            picking={picking}
+            switching={switchingTab}
+            onRefresh={refreshTargetStatus}
+            onSelect={handleSwitchTab}
+          />
+          <IconAction
+            label="设置"
+            onClick={() => chrome.runtime.openOptionsPage()}
+          >
+            <Settings />
+          </IconAction>
+        </div>
+        {targetError && (
+          <p role="alert" className="break-words text-xs text-destructive">
+            {targetError}
+          </p>
+        )}
+        {targetStatusError && (
+          <div
+            role="alert"
+            className="flex min-w-0 items-center gap-2 text-xs text-destructive"
+          >
+            <p className="min-w-0 flex-1 break-words">
+              {targetStatusError.message}
+            </p>
+            {targetStatusError.needsReload && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                disabled={running || picking}
+                onClick={() => chrome.runtime.reload()}
+              >
+                重新加载扩展
+              </Button>
+            )}
+          </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
