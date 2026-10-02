@@ -1201,7 +1201,7 @@ export default function App() {
           multiple
         >
           {(picking || pickedElements.length > 0 || attachments.length > 0) && (
-            <div className="flex flex-wrap gap-1 px-3 pt-3">
+            <div className="flex w-full flex-wrap justify-start gap-1 px-3 pt-3">
               {picking && (
                 <ReferenceChip
                   label={
@@ -1264,11 +1264,14 @@ export default function App() {
                     setAutoModeAndPersist(value === "auto")
                   }
                 >
-                  <DropdownMenuRadioItem value="auto">
+                  <DropdownMenuRadioItem
+                    value="auto"
+                    className="cursor-pointer"
+                  >
                     <FastForward className="size-4" />
                     Auto mode
                   </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="ask">
+                  <DropdownMenuRadioItem value="ask" className="cursor-pointer">
                     <Hand className="size-4" />
                     Ask before acting
                   </DropdownMenuRadioItem>
@@ -1283,7 +1286,7 @@ export default function App() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="px-1 font-mono text-xs text-muted-foreground"
+                      className="cursor-default px-1 font-mono text-xs text-muted-foreground"
                       aria-label="上下文 Token 用量"
                     >
                       {formatTokens(

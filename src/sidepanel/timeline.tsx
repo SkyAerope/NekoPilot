@@ -39,6 +39,8 @@ import {
 } from "./model";
 
 const ToolDetails = lazy(() => import("./tool-details"));
+const stepTriggerClassName =
+  "flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-left text-xs transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 const approvalBadgeClassName =
   "shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-300";
 
@@ -152,8 +154,11 @@ function TimelineStep({
   nextType?: LogEntry["type"];
   connected: boolean;
 } & StepActions) {
-  const iconOffset = entry.type === "tool_call" ? 6 : 0;
-  const nextIconOffset = nextType === "tool_call" ? 6 : 0;
+  const hasExpandableHeader =
+    entry.type === "tool_call" || entry.type === "thinking";
+  const iconOffset = hasExpandableHeader ? 6 : 0;
+  const nextIconOffset =
+    nextType === "tool_call" || nextType === "thinking" ? 6 : 0;
   const Icon =
     entry.type === "thinking"
       ? Brain
@@ -185,9 +190,7 @@ function TimelineStep({
           />
         </span>
       </div>
-      <div
-        className={cn("min-w-0 flex-1", entry.type !== "tool_call" && "pb-2")}
-      >
+      <div className={cn("min-w-0 flex-1", !hasExpandableHeader && "pb-2")}>
         {entry.type === "tool_call" && (
           <ToolCallStep
             entry={entry}
@@ -245,12 +248,12 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
       isStreaming={!done}
       duration={entry.thinkSeconds}
     >
-      <ReasoningTrigger disabled={!content} className="gap-2 text-xs">
-        <span className="shrink-0 font-medium">
+      <ReasoningTrigger disabled={!content} className={stepTriggerClassName}>
+        <span className="shrink-0 font-medium text-muted-foreground">
           {done ? `已思考 ${entry.thinkSeconds ?? 1} 秒` : "Thinking…"}
         </span>
         {!open && (
-          <span className="min-w-0 flex-1 truncate text-left opacity-60">
+          <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70">
             {preview}
           </span>
         )}
@@ -265,7 +268,7 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
       <CollapsibleContent>
         <div
           ref={scrollRef}
-          className="mt-2 max-h-50 overflow-y-auto text-muted-foreground"
+          className="max-h-50 overflow-y-auto rounded-md border px-3 py-3 text-muted-foreground"
         >
           <MarkdownMessage content={content} streaming={!done} />
         </div>
@@ -302,7 +305,7 @@ function ToolCallStep({
       onOpenChange={setExpanded}
       className="mb-0 min-w-0 border-0"
     >
-      <CollapsibleTrigger className="flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-left text-xs transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+      <CollapsibleTrigger className={stepTriggerClassName}>
         <span className="shrink-0 font-medium text-muted-foreground">
           {getToolLabel(entry.toolName)}
         </span>

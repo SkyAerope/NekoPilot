@@ -5,8 +5,19 @@ import {
 } from "@/components/ai-elements/code-block";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { MarkdownMessage } from "./markdown";
 import type { LogEntry } from "./model";
+
+// 与执行器中只返回完成标记的操作对应；异常或额外返回信息仍保留结果页。
+const completionOnlyTools = new Set([
+  "click",
+  "keyboard_type",
+  "scroll",
+  "drag",
+  "navigate",
+  "wait",
+  "hover",
+  "handle_dialog",
+]);
 
 function parseJson(value: string): unknown {
   try {
@@ -46,18 +57,54 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
   const hasCode =
     entry.toolName === "execute_js" && typeof fields?.code === "string";
   const hasResult = entry.toolResult !== undefined || !!entry.screenshotData;
+  const result = parseJson(entry.toolResult ?? "");
+  const hideTabs =
+    !entry.screenshotData &&
+    entry.toolSuccess !== false &&
+    (entry.toolResult === "done" ||
+      result === "done" ||
+      (entry.toolResult === undefined &&
+        completionOnlyTools.has(entry.toolName ?? "")));
   const [tab, setTab] = useState(hasResult ? "result" : "input");
   const userSelected = useRef(false);
   // 结果到达时自动展示；用户主动选择的标签页保持不变。
   useEffect(() => {
     if (hasResult && !userSelected.current) setTab("result");
   }, [hasResult]);
-  const result = parseJson(entry.toolResult ?? "");
   const extraFields = hasCode
     ? Object.entries(fields!).filter(
         ([key]) => !["code", "description"].includes(key),
       )
     : [];
+  const inputContent = (
+    <>
+      {hasCode ? (
+        <>
+          {typeof fields!.description === "string" &&
+            fields!.description.length > 60 && (
+              <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                {fields!.description}
+              </p>
+            )}
+          <DetailCode code={fields!.code as string} language="javascript" />
+          {extraFields.length > 0 && (
+            <DetailCode
+              code={JSON.stringify(Object.fromEntries(extraFields), null, 2)}
+              language="json"
+            />
+          )}
+        </>
+      ) : (
+        <DetailCode
+          code={
+            args !== undefined ? JSON.stringify(args, null, 2) : entry.content
+          }
+          language={args !== undefined ? "json" : "text"}
+        />
+      )}
+    </>
+  );
+  if (hideTabs) return <div className="min-w-0 py-2">{inputContent}</div>;
   return (
     <Tabs
       value={tab}
@@ -76,30 +123,7 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
         </TabsList>
       </div>
       <TabsContent value="input" className="mt-2 pb-2">
-        {hasCode ? (
-          <>
-            {typeof fields!.description === "string" &&
-              fields!.description.length > 60 && (
-                <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-                  {fields!.description}
-                </p>
-              )}
-            <DetailCode code={fields!.code as string} language="javascript" />
-            {extraFields.length > 0 && (
-              <DetailCode
-                code={JSON.stringify(Object.fromEntries(extraFields), null, 2)}
-                language="json"
-              />
-            )}
-          </>
-        ) : (
-          <DetailCode
-            code={
-              args !== undefined ? JSON.stringify(args, null, 2) : entry.content
-            }
-            language={args !== undefined ? "json" : "text"}
-          />
-        )}
+        {inputContent}
       </TabsContent>
       <TabsContent value="result" className="mt-2 pb-2">
         {entry.screenshotData ? (
@@ -121,12 +145,10 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
         ) : result !== undefined ? (
           <DetailCode code={JSON.stringify(result, null, 2)} language="json" />
         ) : (
-          <div className="max-h-64 overflow-auto px-3 py-2 text-xs">
-            <MarkdownMessage
-              content={entry.toolResult || "工具未返回内容。"}
-              streaming={false}
-            />
-          </div>
+          <DetailCode
+            code={entry.toolResult || "工具未返回内容。"}
+            language="text"
+          />
         )}
       </TabsContent>
     </Tabs>

@@ -248,7 +248,7 @@ test("工具审批与参数展示不依赖 AI SDK 后端", async ({ page }) => {
     name: "click",
     result: { success: true, data: "已点击" },
   });
-  await expect(page.getByText("已点击", { exact: true })).toBeVisible();
+  await expect(page.locator("code:visible")).toContainText("已点击");
   await emit(page, "tool_call", {
     id: "navigate-1",
     name: "navigate",
@@ -265,6 +265,47 @@ test("工具审批与参数展示不依赖 AI SDK 后端", async ({ page }) => {
       ),
     )
     .toBe(true);
+  await expectNoOverflow(page);
+});
+
+test("完成标记工具隐藏标签页但保留失败结果", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await emit(page, "tool_call", {
+    id: "wait-1",
+    name: "wait",
+    args: '{"ms":200}',
+    needsPermission: false,
+  });
+  await page.getByRole("button", { name: /Wait/ }).click();
+  await expect(page.locator("code:visible")).toContainText('"ms": 200');
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await emit(page, "tool_result", {
+    id: "wait-1",
+    name: "wait",
+    result: { success: true, data: "done" },
+  });
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await expect(page.locator("code:visible")).toContainText('"ms": 200');
+  await emit(page, "tool_call", {
+    id: "click-1",
+    name: "click",
+    args: '{"selector":"#missing"}',
+    needsPermission: false,
+  });
+  await page.getByRole("button", { name: /Click/ }).click();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await emit(page, "tool_result", {
+    id: "click-1",
+    name: "click",
+    result: { success: false, error: "未找到目标元素" },
+  });
+  await expect(
+    page.getByRole("tab", { name: "结果", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("code:visible").last()).toContainText(
+    "未找到目标元素",
+  );
   await expectNoOverflow(page);
 });
 
