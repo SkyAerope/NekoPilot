@@ -970,25 +970,21 @@ export default function App() {
 
   // 自动展开/折叠 steps 分组（仅对用户未碰过的 key 生效）
   useEffect(() => {
-    if (logs.length === 0) return;
-    const last = logs[logs.length - 1];
-    if (last.type === "tool_call" || last.type === "thinking") {
-      let groupStart = logs.length - 1;
-      while (
-        groupStart > 0 &&
-        (logs[groupStart - 1].type === "tool_call" ||
-          logs[groupStart - 1].type === "error" ||
-          logs[groupStart - 1].type === "thinking")
-      ) {
-        groupStart--;
-      }
-      const groupKey = logs[groupStart].id;
+    if (segments.length === 0) return;
+    const last = segments[segments.length - 1];
+    if (
+      last.kind === "steps" &&
+      ["tool_call", "thinking"].includes(
+        last.entries[last.entries.length - 1].type,
+      )
+    ) {
+      const groupKey = last.entries[0].id;
       if (!interactedKeys.has(groupKey)) {
         setExpandedGroupKeys((prev) =>
           prev.has(groupKey) ? prev : new Set([...prev, groupKey]),
         );
       }
-    } else if (last.type === "assistant") {
+    } else if (last.kind === "assistant") {
       // 助手开始正式回复：折叠所有未被用户碰过的 steps
       setExpandedGroupKeys((prev) => {
         const next = new Set<number>();
@@ -998,7 +994,7 @@ export default function App() {
         return next;
       });
     }
-  }, [logs, interactedKeys]);
+  }, [segments, interactedKeys]);
 
   const toggleGroup = useCallback((key: number) => {
     setInteractedKeys((prev) =>
@@ -1179,7 +1175,8 @@ export default function App() {
           );
         })}
         {running &&
-          (logs.length === 0 || logs[logs.length - 1].type === "user") && (
+          (segments.length === 0 ||
+            segments[segments.length - 1].kind === "user") && (
             <WorkingIndicator />
           )}
         <div ref={logsEndRef} />

@@ -76,6 +76,36 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
         ([key]) => !["code", "description"].includes(key),
       )
     : [];
+  const resultContent = entry.screenshotData ? (
+    <div className="px-3 py-2">
+      <img
+        src={`data:${entry.screenshotMime || "image/png"};base64,${entry.screenshotData}`}
+        alt="浏览器截图"
+        className={cn(
+          "max-h-64 max-w-full rounded-md border object-contain",
+          entry.prunedFromContext && "opacity-50 grayscale",
+        )}
+      />
+      {entry.prunedFromContext && (
+        <p className="mt-2 text-xs text-muted-foreground">已从上下文删除</p>
+      )}
+    </div>
+  ) : result !== undefined ? (
+    <DetailCode code={JSON.stringify(result, null, 2)} language="json" />
+  ) : (
+    <DetailCode code={entry.toolResult || "工具未返回内容。"} language="text" />
+  );
+  if (entry.toolName === "screenshot") {
+    return (
+      <div className="min-w-0 py-2">
+        {hasResult ? (
+          resultContent
+        ) : (
+          <p className="px-3 py-2 text-xs text-muted-foreground">正在截屏…</p>
+        )}
+      </div>
+    );
+  }
   const inputContent = (
     <>
       {hasCode ? (
@@ -126,30 +156,7 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
         {inputContent}
       </TabsContent>
       <TabsContent value="result" className="mt-2 pb-2">
-        {entry.screenshotData ? (
-          <div className="px-3 py-2">
-            <img
-              src={`data:${entry.screenshotMime || "image/png"};base64,${entry.screenshotData}`}
-              alt="浏览器截图"
-              className={cn(
-                "max-h-64 max-w-full rounded-md border object-contain",
-                entry.prunedFromContext && "opacity-50 grayscale",
-              )}
-            />
-            {entry.prunedFromContext && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                已从上下文删除
-              </p>
-            )}
-          </div>
-        ) : result !== undefined ? (
-          <DetailCode code={JSON.stringify(result, null, 2)} language="json" />
-        ) : (
-          <DetailCode
-            code={entry.toolResult || "工具未返回内容。"}
-            language="text"
-          />
-        )}
+        {resultContent}
       </TabsContent>
     </Tabs>
   );

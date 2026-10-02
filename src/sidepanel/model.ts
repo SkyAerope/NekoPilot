@@ -179,6 +179,8 @@ export function groupLogs(logs: LogEntry[]): LogSegment[] {
     }
   };
   for (const entry of logs) {
+    // 流式正文可能先到达空占位；保留原始日志，但不切断可见步骤。
+    if (entry.type === "assistant" && !entry.content.trim()) continue;
     if (entry.type === "user" || entry.type === "assistant") {
       flushSteps();
       segments.push({ kind: entry.type, entry });

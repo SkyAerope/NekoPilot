@@ -223,6 +223,116 @@ test("设置保留自由模型名、自动保存和条件字段", async ({ page 
   await expectNoOverflow(page);
 });
 
+test("模型自动补全支持过滤、输入框键盘选择、自由输入和焦点管理", async ({
+  page,
+}) => {
+  await installHarness(page);
+  await page.route("https://example.invalid/v1/models", (route) =>
+    route.fulfill({
+      json: { data: [{ id: "beta-model" }, { id: "alpha-model" }] },
+    }),
+  );
+  await page.goto("/options.html");
+  const input = page.getByRole("combobox", { name: "模型", exact: true });
+  await expect(input).toHaveValue("custom-model");
+  await page
+    .getByRole("button", { name: "从 API 获取模型列表", exact: true })
+    .click();
+  await input.focus();
+  await expect(input).toBeFocused();
+  await expect(page.getByRole("option")).toHaveText([
+    "alpha-model",
+    "beta-model",
+  ]);
+  await page.getByRole("option", { name: "beta-model", exact: true }).click();
+  await expect(input).toHaveValue("beta-model");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+
+  await input.fill("ALPHA");
+  await expect(page.getByRole("option")).toHaveText(["alpha-model"]);
+  await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
+  await expect(input).toHaveValue("ALPHA");
+  await input.press("ArrowDown");
+  await input.press("Enter");
+  await expect(input).toHaveValue("alpha-model");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window.__harness.storage.settings as { model: string }).model,
+      ),
+    )
+    .toBe("alpha-model");
+
+  await input.fill("private-custom-model");
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText("可直接使用输入的名称");
+  await input.press("Enter");
+  await expect(input).toHaveValue("private-custom-model");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window.__harness.storage.settings as { model: string }).model,
+      ),
+    )
+    .toBe("private-custom-model");
+  await input.press("Escape");
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+  await input.press("ArrowDown");
+  await expect(input).toHaveAttribute("aria-expanded", "true");
+  await input.press("Tab");
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await input.focus();
+  await expect(page.getByRole("option")).toHaveCount(2);
+  await expectNoOverflow(page);
+});
+
+test("获取模型失败时仍允许输入，并可刷新后选择模型", async ({ page }) => {
+  await installHarness(page);
+  let failing = true;
+  await page.route("https://example.invalid/v1/models", (route) =>
+    route.fulfill(
+      failing
+        ? { status: 503, body: "unavailable" }
+        : { json: { data: [{ id: "recovered-model" }] } },
+    ),
+  );
+  await page.goto("/options.html");
+  await page
+    .getByRole("button", { name: "从 API 获取模型列表", exact: true })
+    .click();
+  await page.getByLabel("模型", { exact: true }).focus();
+  await expect(page.getByRole("alert", { includeHidden: true })).toContainText(
+    "HTTP 503",
+  );
+  await expect(page.getByRole("status")).toContainText("可手动输入");
+  await page.keyboard.press("Escape");
+  await page.getByLabel("模型", { exact: true }).fill("manual-model");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window.__harness.storage.settings as { model: string }).model,
+      ),
+    )
+    .toBe("manual-model");
+  failing = false;
+  await page
+    .getByRole("button", { name: "从 API 获取模型列表", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByLabel("模型", { exact: true }).focus();
+  await page
+    .getByRole("option", { name: "recovered-model", exact: true })
+    .click();
+  await expect(page.getByLabel("模型", { exact: true })).toHaveValue(
+    "recovered-model",
+  );
+});
+
 test("主题跟随系统并响应存储同步", async ({ page }) => {
   await installHarness(page, { themeMode: "auto" });
   await page.emulateMedia({ colorScheme: "light" });
@@ -384,6 +494,7 @@ test("恢复历史、截图裁剪标记与重试回滚", async ({ page }) => {
   await expect(page.getByText("页面已检查", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Take screenshot/ }).click();
   await expect(page.getByAltText("浏览器截图")).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
   await emit(page, "screenshots_pruned", { ids: ["shot-1"] });
   await expect(page.getByText("已从上下文删除", { exact: true })).toBeVisible();
   await expect(page.getByAltText("浏览器截图")).toHaveClass(/grayscale/);
@@ -447,6 +558,80 @@ test("流式思考、步骤分组和手动折叠", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /Read page structure/ }),
   ).toBeVisible();
+});
+
+test("空白正文合并前后步骤，后续流式正文仍能显示", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await emit(page, "tool_call", {
+    id: "read-blank",
+    name: "read_page",
+    args: "{}",
+  });
+  for (const content of ["", " \n\t", "\u00a0\u3000"]) {
+    await emit(page, "message", content);
+  }
+  await emit(page, "tool_call", {
+    id: "wait-blank",
+    name: "wait",
+    args: '{"ms":1}',
+  });
+  const group = page.getByRole("button", { name: "2 steps", exact: true });
+  await expect(group).toHaveCount(1);
+  await expect(group).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".is-assistant")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: /Read page structure/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /Wait/ })).toBeVisible();
+
+  await emit(page, "message_delta", "页面分析完成");
+  await expect(page.getByText("页面分析完成", { exact: true })).toBeVisible();
+  await expect(group).toHaveCount(0);
+});
+
+test("截图详情只展示结果，等待和失败时也没有标签页", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await emit(page, "tool_call", {
+    id: "shot-only",
+    name: "screenshot",
+    args: "{}",
+  });
+  await page.getByRole("button", { name: /Take screenshot/ }).click();
+  await expect(page.getByText("正在截屏…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await emit(page, "tool_result", {
+    id: "shot-only",
+    name: "screenshot",
+    result: { success: true, data: screenshotData },
+  });
+  await expect(page.getByAltText("浏览器截图")).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await emit(page, "tool_result", {
+    id: "shot-only",
+    name: "screenshot",
+    result: { success: false, error: "截图失败" },
+  });
+  await expect(page.locator("code:visible")).toContainText("截图失败");
+  await expect(page.getByRole("tab")).toHaveCount(0);
+});
+
+test("思考转圈和完成勾选保持在同一位置", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await emit(page, "thinking", "检查页面");
+  const thinking = page.getByRole("button", { name: /Thinking/ });
+  const spinner = await thinking.locator("svg.animate-spin").boundingBox();
+  expect(spinner).not.toBeNull();
+  await emit(page, "assistant_turn_done", {});
+  const completed = page.getByRole("button", { name: /已思考/ });
+  await expect(completed.locator("svg.animate-spin")).toHaveCount(0);
+  const check = await completed.locator("svg").first().boundingBox();
+  expect(check).not.toBeNull();
+  expect(
+    Math.abs(spinner!.x + spinner!.width / 2 - check!.x - check!.width / 2),
+  ).toBeLessThan(1);
 });
 
 test("页面元素引用、附件删除与窄侧边栏布局", async ({ page }) => {

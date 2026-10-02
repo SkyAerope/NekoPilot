@@ -252,15 +252,17 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
         <span className="shrink-0 font-medium text-muted-foreground">
           {done ? `已思考 ${entry.thinkSeconds ?? 1} 秒` : "Thinking…"}
         </span>
-        {!open && (
-          <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70">
-            {preview}
-          </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70">
+          {!open && preview}
+        </span>
+        {done ? (
+          <CheckCircle2 className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
         )}
-        {!done && <LoaderCircle className="ml-auto size-3 animate-spin" />}
         <ChevronDown
           className={cn(
-            "ml-auto size-3 shrink-0 transition-transform",
+            "size-3 shrink-0 transition-transform",
             open && "rotate-180",
           )}
         />

@@ -34,6 +34,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ModelCombobox } from "./ModelCombobox";
 import type { ThemeMode } from "../shared/theme";
 interface Settings {
   apiKey: string;
@@ -206,24 +207,15 @@ export default function Options({
             onChange={(value) => updateSettings({ baseUrl: value })}
           />
           <div className="space-y-2">
-            <Label htmlFor="model">模型</Label>
+            <Label id="model-label">模型</Label>
             <div className="flex items-center gap-2">
-              <Input
-                id="model"
-                list="model-options"
+              <ModelCombobox
                 value={settings.model}
-                onChange={(event) =>
-                  updateSettings({ model: event.target.value })
-                }
-                placeholder="输入或从列表选择模型"
-                aria-invalid={!!modelError}
-                aria-describedby={modelError ? "model-error" : undefined}
+                onValueChange={(model) => updateSettings({ model })}
+                options={modelOptions}
+                loading={fetchingModels}
+                invalid={!!modelError}
               />
-              <datalist id="model-options">
-                {modelOptions.map((model) => (
-                  <option key={model} value={model} />
-                ))}
-              </datalist>
               <Button
                 variant="outline"
                 size="icon"
