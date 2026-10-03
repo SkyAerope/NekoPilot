@@ -12,6 +12,7 @@ import {
   Paperclip,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -71,6 +72,10 @@ function getErrorMessage(error: unknown): string {
 
 export default function App() {
   const [input, setInput] = useState("");
+  const [editingMessage, setEditingMessage] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [targetStatus, setTargetStatus] = useState<TargetTabStatus | null>(
@@ -673,6 +678,7 @@ export default function App() {
     const text = input.trim();
     if (
       (!text && pickedElements.length === 0) ||
+      editingMessage !== null ||
       running ||
       switchingTab ||
       targetStatus?.busy ||
@@ -808,6 +814,7 @@ export default function App() {
     }
   }, [
     input,
+    editingMessage,
     running,
     autoMode,
     pickedElements,
@@ -833,6 +840,7 @@ export default function App() {
       return;
     }
     setLogs([]);
+    setEditingMessage(null);
     setPromptTokens(null);
     setCacheInfo(null);
     setPickedElements([]);
@@ -924,25 +932,27 @@ export default function App() {
   }, []);
 
   const handleEditMessage = useCallback(
-    async (entryId: number) => {
+    (entryId: number) => {
       if (running) return;
       const entry = logs.find((l) => l.id === entryId);
       if (!entry || entry.type !== "user") return;
       const text = entry.content.replace(/\n\[附件:.*?\]$/s, "");
-      setInput(text);
-      if (entry.pickedElements) setPickedElements([...entry.pickedElements]);
-      await sendMessage("agent:reset");
-      setLogs((prev) => {
-        const idx = prev.findIndex((l) => l.id === entryId);
-        return idx >= 0 ? prev.slice(0, idx) : prev;
-      });
+      setEditingMessage({ id: entryId, text });
     },
     [logs, running],
   );
 
   const handleRetry = useCallback(
-    async (entryId: number, isUser: boolean) => {
-      if (running) return;
+    async (entryId: number, isUser: boolean, editedText?: string) => {
+      if (
+        running ||
+        switchingTab ||
+        targetStatus?.busy ||
+        targetStatusError?.needsReload ||
+        picking ||
+        (editingMessage !== null && editedText === undefined)
+      )
+        return;
       const idx = logs.findIndex((l) => l.id === entryId);
       if (idx < 0) return;
       // 定位目标 user entry 及其在 user 序列中的索引
@@ -961,64 +971,77 @@ export default function App() {
         }
       }
       if (!userEntry || userIdx < 0) return;
-      // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
-      let turnIndex = 0;
-      for (let i = 0; i < userIdx; i++) {
-        if (logs[i].type === "user") turnIndex++;
-      }
-      // 后端截断到该 user 消息之前（不含），保留先前对话
-      await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
-      // 前端 logs 也截断到该 user 消息之前
-      setLogs(logs.slice(0, userIdx));
-      const text = userEntry.content.replace(/\n\[附件:.*?\]$/s, "");
-      const elementContext =
-        userEntry.pickedElements
-          ?.map(
-            (el) =>
-              `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`,
-          )
-          .join("\n") ?? "";
-      const fullMessage = [text, elementContext].filter(Boolean).join("\n");
-      const settings = await sendMessage<{
-        apiKey?: string;
-        baseUrl?: string;
-        model?: string;
-        showClickMarker?: boolean;
-        provider?: string;
-        enableShortRefs?: boolean;
-        screenshotScaleMode?: string;
-        screenshotMaxLongEdge?: number;
-        screenshotMaxPixels?: number;
-        enableScreenshotPruning?: boolean;
-        screenshotKeepN?: number;
-        screenshotPruneTrigger?: number;
-        enableCodeExecution?: boolean;
-        codeExecutionTimeoutMs?: number;
-        codeExecutionMaxOutputChars?: number;
-        enablePromptCaching?: boolean;
-      }>("settings:get");
-      if (!settings?.apiKey) {
-        setLogs((prev) => [
-          ...prev,
-          {
-            id: ++logIdCounter,
-            type: "error" as const,
-            content: "请先配置 API Key",
-            timestamp: Date.now(),
-          },
-        ]);
+      const text =
+        editedText === undefined
+          ? userEntry.content.replace(/\n\[附件:.*?\]$/s, "")
+          : editedText.trim();
+      if (
+        editedText !== undefined &&
+        !text &&
+        !userEntry.pickedElements?.length
+      )
         return;
-      }
-      // 重新追加用户消息到 logs（保持原始内容/附件信息便于再次重试）
-      const replayedEntry: LogEntry = {
-        ...userEntry,
-        id: ++logIdCounter,
-        timestamp: Date.now(),
-        targetTab: targetStatus?.target ?? undefined,
-      };
-      setLogs((prev) => [...prev, replayedEntry]);
       setRunning(true);
       try {
+        // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
+        let turnIndex = 0;
+        for (let i = 0; i < userIdx; i++) {
+          if (logs[i].type === "user") turnIndex++;
+        }
+        const elementContext =
+          userEntry.pickedElements
+            ?.map(
+              (el) =>
+                `[元素: <${el.tag}> selector="${el.selector}" text="${el.text}" rect=(${el.rect.x},${el.rect.y},${el.rect.w}x${el.rect.h}) center=(${Math.round(el.rect.x + el.rect.w / 2)},${Math.round(el.rect.y + el.rect.h / 2)})]`,
+            )
+            .join("\n") ?? "";
+        const fullMessage = [text, elementContext].filter(Boolean).join("\n");
+        const settings = await sendMessage<{
+          apiKey?: string;
+          baseUrl?: string;
+          model?: string;
+          showClickMarker?: boolean;
+          provider?: string;
+          enableShortRefs?: boolean;
+          screenshotScaleMode?: string;
+          screenshotMaxLongEdge?: number;
+          screenshotMaxPixels?: number;
+          enableScreenshotPruning?: boolean;
+          screenshotKeepN?: number;
+          screenshotPruneTrigger?: number;
+          enableCodeExecution?: boolean;
+          codeExecutionTimeoutMs?: number;
+          codeExecutionMaxOutputChars?: number;
+          enablePromptCaching?: boolean;
+        }>("settings:get");
+        if (!settings?.apiKey) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              id: ++logIdCounter,
+              type: "error" as const,
+              content: "请先配置 API Key",
+              timestamp: Date.now(),
+            },
+          ]);
+          setRunning(false);
+          return;
+        }
+        // 确认提交后才回滚历史，编辑草稿和取消操作不影响对话。
+        await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
+        // 重新追加用户消息到 logs（保持原始内容/附件信息便于再次重试）
+        const replayedEntry: LogEntry = {
+          ...userEntry,
+          content:
+            editedText === undefined
+              ? userEntry.content
+              : text + (userEntry.content.match(/\n\[附件:.*?\]$/s)?.[0] ?? ""),
+          id: ++logIdCounter,
+          timestamp: Date.now(),
+          targetTab: targetStatus?.target ?? undefined,
+        };
+        setLogs([...logs.slice(0, userIdx), replayedEntry]);
+        setEditingMessage(null);
         await sendMessage("agent:start", {
           messageId: replayedEntry.id,
           userMessage: fullMessage,
@@ -1081,7 +1104,17 @@ export default function App() {
         setRunning(false);
       }
     },
-    [logs, running, autoMode, targetStatus?.target],
+    [
+      logs,
+      running,
+      autoMode,
+      targetStatus?.target,
+      targetStatus?.busy,
+      switchingTab,
+      targetStatusError?.needsReload,
+      picking,
+      editingMessage,
+    ],
   );
 
   const handleAddFiles = useCallback((files: File[]) => {
@@ -1198,14 +1231,75 @@ export default function App() {
             const messageText = attachmentSuffix
               ? entry.content.slice(0, attachmentSuffix.index)
               : entry.content;
+            const isEditing = editingMessage?.id === entry.id;
             return (
               <Message from="user" key={entry.id} className="mb-5 max-w-full">
-                {messageText && (
+                {isEditing ? (
                   <MessageContent className="w-full border">
-                    <p className="whitespace-pre-wrap break-words">
-                      {messageText}
-                    </p>
+                    <Textarea
+                      autoFocus
+                      aria-label="编辑消息内容"
+                      value={editingMessage.text}
+                      disabled={running}
+                      className="max-h-64 min-h-20 resize-none bg-white text-sm text-zinc-900 dark:bg-input/30 dark:text-foreground"
+                      onChange={(event) =>
+                        setEditingMessage({
+                          id: entry.id,
+                          text: event.target.value,
+                        })
+                      }
+                      onKeyDown={(event) => {
+                        if (event.nativeEvent.isComposing || running) return;
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setEditingMessage(null);
+                        } else if (
+                          event.key === "Enter" &&
+                          (event.ctrlKey || event.metaKey)
+                        ) {
+                          event.preventDefault();
+                          void handleRetry(entry.id, true, editingMessage.text);
+                        }
+                      }}
+                    />
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={running}
+                        onClick={() => setEditingMessage(null)}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={
+                          running ||
+                          switchingTab ||
+                          picking ||
+                          targetStatus?.busy ||
+                          targetStatusError?.needsReload ||
+                          (!editingMessage.text.trim() &&
+                            !entry.pickedElements?.length)
+                        }
+                        onClick={() =>
+                          void handleRetry(entry.id, true, editingMessage.text)
+                        }
+                      >
+                        保存并重新发送
+                      </Button>
+                    </div>
                   </MessageContent>
+                ) : (
+                  messageText && (
+                    <MessageContent className="w-full border">
+                      <p className="whitespace-pre-wrap break-words">
+                        {messageText}
+                      </p>
+                    </MessageContent>
+                  )
                 )}
                 {entry.targetTab && targetChipIds.has(entry.id) && (
                   <div
@@ -1245,28 +1339,30 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                <MessageActions className="self-end">
-                  <MessageAction
-                    tooltip="复制"
-                    onClick={() => handleCopyText(entry.content)}
-                  >
-                    <Copy />
-                  </MessageAction>
-                  <MessageAction
-                    tooltip="编辑"
-                    disabled={running}
-                    onClick={() => handleEditMessage(entry.id)}
-                  >
-                    <Pencil />
-                  </MessageAction>
-                  <MessageAction
-                    tooltip="重试"
-                    disabled={running}
-                    onClick={() => handleRetry(entry.id, true)}
-                  >
-                    <RotateCcw />
-                  </MessageAction>
-                </MessageActions>
+                {!isEditing && (
+                  <MessageActions className="self-end">
+                    <MessageAction
+                      tooltip="复制"
+                      onClick={() => handleCopyText(entry.content)}
+                    >
+                      <Copy />
+                    </MessageAction>
+                    <MessageAction
+                      tooltip="编辑"
+                      disabled={running}
+                      onClick={() => handleEditMessage(entry.id)}
+                    >
+                      <Pencil />
+                    </MessageAction>
+                    <MessageAction
+                      tooltip="重试"
+                      disabled={running || editingMessage !== null}
+                      onClick={() => handleRetry(entry.id, true)}
+                    >
+                      <RotateCcw />
+                    </MessageAction>
+                  </MessageActions>
+                )}
               </Message>
             );
           }
@@ -1338,7 +1434,7 @@ export default function App() {
                   </MessageAction>
                   <MessageAction
                     tooltip="重试"
-                    disabled={running}
+                    disabled={running || editingMessage !== null}
                     onClick={() => handleRetry(turn.firstId, false)}
                   >
                     <RotateCcw />
@@ -1538,6 +1634,7 @@ export default function App() {
                 disabled={
                   !running &&
                   (picking ||
+                    editingMessage !== null ||
                     switchingTab ||
                     targetStatusError?.needsReload ||
                     targetStatus?.busy ||
