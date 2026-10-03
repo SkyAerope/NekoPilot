@@ -1771,6 +1771,132 @@ test("思考过程与多步工具的混合时间线展示", async ({ page }) => 
   });
 });
 
+for (const description of [
+  "核对订单总额",
+  "检查订单条目并计算总额。".repeat(10),
+]) {
+  test(`Run JS 描述收起时显示摘要，展开时只显示完整详情：${description.length}`, async ({
+    page,
+  }) => {
+    await installHarness(page, {
+      chatLogs: [
+        {
+          id: 1,
+          type: "tool_call",
+          toolName: "execute_js",
+          toolCallId: "description-repro",
+          content: JSON.stringify({ description, code: "console.log(100);" }),
+          toolResult: '{"total":100}',
+          toolSuccess: true,
+          timestamp: 1,
+        },
+      ],
+    });
+    await page.goto("/sidepanel.html");
+    const header = page.getByRole("button", { name: /Run JS/ });
+    const summary = header.locator("span.truncate");
+    await expect(summary).toHaveText(description);
+    await expect(summary).toHaveAttribute("title", description);
+    await header.click();
+    await expect(summary).toHaveText("");
+    await expect(summary).not.toHaveAttribute("title");
+    await expect(page.getByText(description, { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("tab", { name: "结果", exact: true }),
+    ).toHaveAttribute("data-state", "active");
+    await page.getByRole("tab", { name: "代码", exact: true }).click();
+    await expect(page.getByText(description, { exact: true })).toBeVisible();
+    await expect(summary).toHaveText("");
+    await header.click();
+    await expect(summary).toHaveText(description);
+    await expect(
+      page.locator("p").filter({ hasText: description }),
+    ).toHaveCount(0);
+    await expectNoOverflow(page);
+  });
+}
+
+for (const toolName of ["read_page", "execute_js"]) {
+  test(`工具详情复制按钮与分段按钮同行，并复制当前内容：${toolName}`, async ({
+    page,
+  }, testInfo) => {
+    const input =
+      toolName === "execute_js"
+        ? { code: 'console.log("alpha");', timeout: 1000 }
+        : { selector: "#sample", limit: 100 };
+    const result = { value: "beta" };
+    await installHarness(page, {
+      chatLogs: [
+        {
+          id: 1,
+          type: "tool_call",
+          toolName,
+          toolCallId: "copy-toolbar",
+          content: JSON.stringify(input),
+          toolResult: JSON.stringify(result),
+          toolSuccess: true,
+          timestamp: 1,
+        },
+      ],
+    });
+    await page.addInitScript(() => {
+      const copiedTexts: string[] = [];
+      Object.defineProperty(navigator, "clipboard", {
+        value: {
+          writeText: async (text: string) => {
+            copiedTexts.push(text);
+          },
+        },
+        configurable: true,
+      });
+      Object.assign(window, { copiedTexts });
+    });
+    await page.goto("/sidepanel.html");
+    await page
+      .getByRole("button", {
+        name: toolName === "execute_js" ? /Run JS/ : /Read page structure/,
+      })
+      .click();
+    const tabs = page.getByRole("tablist", { name: "工具详情" });
+    const copyResult = page.getByRole("button", {
+      name: "复制结果",
+      exact: true,
+    });
+    const tabsBox = (await tabs.boundingBox())!;
+    const copyBox = (await copyResult.boundingBox())!;
+    expect(copyBox.x).toBeGreaterThan(tabsBox.x + tabsBox.width);
+    expect(
+      Math.abs(copyBox.y + copyBox.height / 2 - tabsBox.y - tabsBox.height / 2),
+    ).toBeLessThan(1);
+    await copyResult.click();
+    await page
+      .getByRole("tab", {
+        name: toolName === "execute_js" ? "代码" : "参数",
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole("button", {
+        name: toolName === "execute_js" ? "复制代码" : "复制参数",
+        exact: true,
+      })
+      .click();
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { copiedTexts: string[] }).copiedTexts,
+      ),
+    ).toEqual([
+      JSON.stringify(result, null, 2),
+      toolName === "execute_js"
+        ? `${input.code}\n\n${JSON.stringify({ timeout: 1000 }, null, 2)}`
+        : JSON.stringify(input, null, 2),
+    ]);
+    await expect(page.locator("pre").locator("button")).toHaveCount(0);
+    await expectNoOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("copy-toolbar.png") });
+  });
+}
+
 for (const theme of ["light", "dark"] as const) {
   for (const tab of ["代码", "参数", "结果"]) {
     test(`空闲工具详情拖选保持选区：${tab} ${theme}`, async ({

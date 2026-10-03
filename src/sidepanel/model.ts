@@ -91,9 +91,7 @@ export function getToolSubtitle(name?: string, argsStr?: string): string {
   const trim = (s: string, n = 60) => (s.length > n ? s.slice(0, n) + "…" : s);
   switch (name) {
     case "execute_js":
-      return typeof args.description === "string"
-        ? trim(args.description, 60)
-        : "";
+      return typeof args.description === "string" ? args.description : "";
     case "navigate":
       return typeof args.url === "string" ? args.url : "";
     case "keyboard_type": {

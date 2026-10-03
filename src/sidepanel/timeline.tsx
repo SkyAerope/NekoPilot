@@ -302,6 +302,10 @@ function ToolCallStep({
   const awaitingApproval = state === "approval-requested";
   const executing = state === "input-available";
   const subtitle = getToolSubtitle(entry.toolName, entry.content);
+  const headerSubtitle =
+    entry.toolName === "execute_js" && (expanded || awaitingApproval)
+      ? ""
+      : subtitle;
   return (
     <Tool
       open={expanded}
@@ -314,9 +318,9 @@ function ToolCallStep({
         </span>
         <span
           className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70"
-          title={subtitle}
+          title={headerSubtitle || undefined}
         >
-          {subtitle}
+          {headerSubtitle}
         </span>
         {awaitingApproval && (
           <span className={approvalBadgeClassName}>待审批</span>

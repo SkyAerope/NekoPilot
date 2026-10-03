@@ -38,13 +38,8 @@ function DetailCode({
     <CodeBlock
       code={code}
       language={language}
-      className="rounded-none border-0 [&_pre]:max-h-64 [&_pre]:p-3! [&_pre]:pr-10! [&_pre]:text-xs! [&_code]:text-xs!"
-    >
-      <CodeBlockCopyButton
-        aria-label="复制代码"
-        className="size-6 text-muted-foreground"
-      />
-    </CodeBlock>
+      className="rounded-none border-0 [&_pre]:max-h-64 [&_pre]:p-3! [&_pre]:text-xs! [&_code]:text-xs!"
+    />
   );
 }
 
@@ -56,6 +51,15 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
       : undefined;
   const hasCode =
     entry.toolName === "execute_js" && typeof fields?.code === "string";
+  const description =
+    hasCode && typeof fields?.description === "string"
+      ? fields.description.trim()
+      : "";
+  const descriptionContent = description ? (
+    <p className="break-words px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+      {description}
+    </p>
+  ) : null;
   const hasResult = entry.toolResult !== undefined || !!entry.screenshotData;
   const result = parseJson(entry.toolResult ?? "");
   const hideTabs =
@@ -76,6 +80,32 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
         ([key]) => !["code", "description"].includes(key),
       )
     : [];
+  const extraInputText =
+    extraFields.length > 0
+      ? JSON.stringify(Object.fromEntries(extraFields), null, 2)
+      : "";
+  const inputText = hasCode
+    ? (fields!.code as string)
+    : args !== undefined
+      ? JSON.stringify(args, null, 2)
+      : entry.content;
+  const inputCopyText = extraInputText
+    ? `${inputText}\n\n${extraInputText}`
+    : inputText;
+  const resultText =
+    result !== undefined
+      ? JSON.stringify(result, null, 2)
+      : entry.toolResult || "工具未返回内容。";
+  const copyButton = (value: "input" | "result") => (
+    <CodeBlockCopyButton
+      key={value}
+      code={value === "input" ? inputCopyText : resultText}
+      aria-label={
+        value === "input" ? (hasCode ? "复制代码" : "复制参数") : "复制结果"
+      }
+      className="size-6 text-muted-foreground"
+    />
+  );
   const resultContent = entry.screenshotData ? (
     <div className="px-3 py-2">
       <img
@@ -91,13 +121,16 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
       )}
     </div>
   ) : result !== undefined ? (
-    <DetailCode code={JSON.stringify(result, null, 2)} language="json" />
+    <DetailCode code={resultText} language="json" />
   ) : (
-    <DetailCode code={entry.toolResult || "工具未返回内容。"} language="text" />
+    <DetailCode code={resultText} language="text" />
   );
   if (entry.toolName === "screenshot") {
     return (
       <div className="min-w-0 py-2">
+        {hasResult && !entry.screenshotData && (
+          <div className="flex justify-end px-3">{copyButton("result")}</div>
+        )}
         {hasResult ? (
           resultContent
         ) : (
@@ -110,31 +143,27 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
     <>
       {hasCode ? (
         <>
-          {typeof fields!.description === "string" &&
-            fields!.description.length > 60 && (
-              <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-                {fields!.description}
-              </p>
-            )}
-          <DetailCode code={fields!.code as string} language="javascript" />
+          <DetailCode code={inputText} language="javascript" />
           {extraFields.length > 0 && (
-            <DetailCode
-              code={JSON.stringify(Object.fromEntries(extraFields), null, 2)}
-              language="json"
-            />
+            <DetailCode code={extraInputText} language="json" />
           )}
         </>
       ) : (
         <DetailCode
-          code={
-            args !== undefined ? JSON.stringify(args, null, 2) : entry.content
-          }
+          code={inputText}
           language={args !== undefined ? "json" : "text"}
         />
       )}
     </>
   );
-  if (hideTabs) return <div className="min-w-0 py-2">{inputContent}</div>;
+  if (hideTabs)
+    return (
+      <div className="min-w-0 py-2">
+        <div className="flex justify-end px-3">{copyButton("input")}</div>
+        {descriptionContent}
+        {inputContent}
+      </div>
+    );
   return (
     <Tabs
       value={tab}
@@ -144,14 +173,17 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
       }}
       className="min-w-0"
     >
-      <div className="px-3 pt-3">
+      <div className="flex items-center justify-between gap-2 px-3 pt-3">
         <TabsList aria-label="工具详情" className="h-8">
           <TabsTrigger value="input">{hasCode ? "代码" : "参数"}</TabsTrigger>
           <TabsTrigger value="result" disabled={!hasResult}>
             结果
           </TabsTrigger>
         </TabsList>
+        {(tab === "input" || !entry.screenshotData) &&
+          copyButton(tab === "input" ? "input" : "result")}
       </div>
+      {descriptionContent}
       <TabsContent value="input" className="mt-2 pb-2">
         {inputContent}
       </TabsContent>
