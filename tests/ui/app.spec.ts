@@ -1397,6 +1397,19 @@ test("页面元素引用、附件删除与窄侧边栏布局", async ({ page }) 
     .getByRole("button", { name: "移除 context.txt", exact: true })
     .click();
   await expect(page.getByText("context.txt", { exact: true })).toHaveCount(0);
+  await page.locator('input[type="file"]').last().setInputFiles([
+    {
+      name: "context, notes.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("测试附件"),
+    },
+    {
+      name: "data.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("name,value"),
+    },
+  ]);
+  await page.getByRole("textbox", { name: "任务内容" }).fill("检查元素和文件");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect
     .poll(() =>
@@ -1408,6 +1421,26 @@ test("页面元素引用、附件删除与窄侧边栏布局", async ({ page }) 
       ),
     )
     .toContain('selector="#submit"');
+  const message = page.locator(".is-user");
+  const bubble = message.locator(":scope > div").first();
+  await expect(bubble).toHaveText("检查元素和文件");
+  const tab = message.locator('[data-slot="message-target-tab"]');
+  const elements = message.locator('[data-slot="message-picked-elements"]');
+  const files = message.locator('[data-slot="message-attachments"]');
+  await expect(elements).toHaveText("<button> 提交");
+  await expect(files.locator('[data-slot="badge"]')).toHaveText([
+    "context, notes.txt",
+    "data.csv",
+  ]);
+  for (const [above, below] of [
+    [bubble, tab],
+    [tab, elements],
+    [elements, files],
+  ]) {
+    const aboveBox = await above.boundingBox();
+    const belowBox = await below.boundingBox();
+    expect(belowBox!.y).toBeGreaterThanOrEqual(aboveBox!.y + aboveBox!.height);
+  }
   await expectNoOverflow(page);
 });
 
@@ -1460,9 +1493,37 @@ test("粘贴附件使用同一份附件状态并保留文件名展示", async ({
   await expect(page.getByText("pasted.txt", { exact: true })).toBeVisible();
   await input.fill("读取附件");
   await input.press("Enter");
+  await expect(page.locator(".is-user > div").first()).toHaveText("读取附件");
+  await expect(page.locator('[data-slot="message-attachments"]')).toHaveText(
+    "pasted.txt",
+  );
+});
+
+test("旧消息的附件文本恢复为气泡外的文件纸片", async ({ page }) => {
+  await installHarness(page, {
+    chatLogs: [
+      {
+        id: 1,
+        type: "user",
+        content: "读取文件\n[附件: context.txt, data.csv]",
+        timestamp: Date.now(),
+      },
+      {
+        id: 2,
+        type: "user",
+        content: "\n[附件: only.txt]",
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  await page.goto("/sidepanel.html");
   await expect(
-    page.getByText("读取附件" + "\n[附件: pasted.txt]", { exact: true }),
-  ).toBeVisible();
+    page.locator(".is-user").first().locator(":scope > div").first(),
+  ).toHaveText("读取文件");
+  await expect(
+    page.locator('[data-slot="message-attachments"] [data-slot="badge"]'),
+  ).toHaveText(["context.txt", "data.csv", "only.txt"]);
+  await expect(page.locator(".is-user").last().locator("p")).toHaveCount(0);
 });
 
 test("流式公式结束后完整渲染且不产生页面错误", async ({ page }) => {

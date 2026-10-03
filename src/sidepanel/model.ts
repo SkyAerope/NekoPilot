@@ -31,6 +31,7 @@ export interface LogEntry {
   screenshotMime?: string;
   prunedFromContext?: boolean;
   pickedElements?: PickedElement[];
+  attachmentNames?: string[];
   targetTab?: TargetTab;
   showTargetTabChip?: boolean;
   // thinking 相关

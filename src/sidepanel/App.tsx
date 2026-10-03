@@ -705,6 +705,7 @@ export default function App() {
             ? `\n[附件: ${attachmentNames.join(", ")}]`
             : ""),
         timestamp: Date.now(),
+        attachmentNames: attachmentNames.length ? attachmentNames : undefined,
         targetTab: targetStatus?.target ?? undefined,
         pickedElements:
           pickedElements.length > 0 ? [...pickedElements] : undefined,
@@ -1191,23 +1192,21 @@ export default function App() {
         {turns.map((turn) => {
           if (turn.kind === "user") {
             const entry = turn.segment.entry;
+            const attachmentSuffix = entry.content.match(/\n\[附件: (.*?)\]$/s);
+            const attachmentNames =
+              entry.attachmentNames ?? attachmentSuffix?.[1].split(", ") ?? [];
+            const messageText = attachmentSuffix
+              ? entry.content.slice(0, attachmentSuffix.index)
+              : entry.content;
             return (
               <Message from="user" key={entry.id} className="mb-5 max-w-full">
-                <MessageContent className="w-full border">
-                  <p className="whitespace-pre-wrap break-words">
-                    {entry.content}
-                  </p>
-                  {!!entry.pickedElements?.length && (
-                    <div className="flex flex-wrap gap-1">
-                      {entry.pickedElements.map((element) => (
-                        <ReferenceChip
-                          key={element.id}
-                          label={`<${element.tag}> ${element.text || element.selector}`}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </MessageContent>
+                {messageText && (
+                  <MessageContent className="w-full border">
+                    <p className="whitespace-pre-wrap break-words">
+                      {messageText}
+                    </p>
+                  </MessageContent>
+                )}
                 {entry.targetTab && targetChipIds.has(entry.id) && (
                   <div
                     data-slot="message-target-tab"
@@ -1217,6 +1216,33 @@ export default function App() {
                       label={entry.targetTab.title}
                       icon={<TabIcon tab={entry.targetTab} />}
                     />
+                  </div>
+                )}
+                {!!entry.pickedElements?.length && (
+                  <div
+                    data-slot="message-picked-elements"
+                    className="flex max-w-full flex-wrap justify-end gap-1 self-end"
+                  >
+                    {entry.pickedElements.map((element) => (
+                      <ReferenceChip
+                        key={element.id}
+                        label={`<${element.tag}> ${element.text || element.selector}`}
+                      />
+                    ))}
+                  </div>
+                )}
+                {!!attachmentNames.length && (
+                  <div
+                    data-slot="message-attachments"
+                    className="flex max-w-full flex-wrap justify-end gap-1 self-end"
+                  >
+                    {attachmentNames.map((name, index) => (
+                      <ReferenceChip
+                        key={index}
+                        label={name}
+                        icon={<Paperclip className="size-3 shrink-0" />}
+                      />
+                    ))}
                   </div>
                 )}
                 <MessageActions className="self-end">
