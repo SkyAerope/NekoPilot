@@ -52,8 +52,10 @@ NekoPilot 是一个运行在 Chrome 侧边栏的浏览器自动化助手。它�
 
 ### 1. 构建扩展
 
+需要 Node.js 22.13 或更高版本，以及 pnpm 11.19.0（版本固定在 `package.json`）。项目使用官方 npm 源，只允许 `esbuild` 和 `sharp` 执行依赖构建脚本。
+
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 ```
 

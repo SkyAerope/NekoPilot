@@ -1,2 +1,6 @@
-onlyBuiltDependencies:
-  - sharp
+allowBuilds:
+  esbuild: true
+  sharp: true
+
+# 依赖状态异常时立即报错，避免构建或格式化隐式触发安装。
+verifyDepsBeforeRun: error
