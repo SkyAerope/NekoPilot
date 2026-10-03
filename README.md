@@ -67,20 +67,20 @@ pnpm build
 
 ### 3. 配置 API
 
-点击扩展图标，打开侧边栏 → 点击右下角齿轮进入设置：
+点击扩展图标，打开侧边栏，然后点击右下角齿轮图标进入设置页面，填写这些：
 
 - **接口类型**：`OpenAI` 是 OpenAI Completions 接口，`Anthropic` 是 Anthropic Messages 接口
-- **Base URL**：提供商端点，例如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`
+- **Base URL**：提供商API端点，例如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`
 - **API Key**：你的密钥
-- **模型**：例如 `gpt-5.6-terra`、`claude-sonnet-5.5`，可点击右侧按钮从模型提供商拉取模型列表
+- **模型**：提供商提供的模型ID，可点击右侧按钮从模型提供商拉取模型列表
 
 ### 4. 使用
 
 在任意网页打开插件，输入指令开始。例如：
 
-> 「帮我把这个表单填好后提交」
-> 「找到所有评论里的差评，摘抄给我」
-> 「打开 GitHub trending，把前 5 个项目的标题列出来」
+- 帮我把这个表单填好后提交
+- 找到所有评论里的差评，摘抄给我
+- 打开 GitHub trending，把前 5 个项目的标题列出来
 
 发送指令后，Agent会留在当前标签页继续操作，直接切换标签页不会影响Agent。在底栏可以更改Agent操作的标签页。
 
