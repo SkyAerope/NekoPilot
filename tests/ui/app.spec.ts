@@ -846,7 +846,7 @@ test("设置保留自由模型名、自动保存和条件字段", async ({ page 
       ),
     )
     .toBe("private-custom-model");
-  await page.getByLabel("提供商", { exact: true }).click();
+  await page.getByLabel("接口类型", { exact: true }).click();
   await page.getByRole("option", { name: "Anthropic", exact: true }).click();
   await expect(
     page.getByRole("switch", { name: "启用提示缓存 (Prompt Caching)" }),

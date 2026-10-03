@@ -1,8 +1,6 @@
 # NekoPilot 🐱
 
-> A Chrome side-panel browser-automation copilot powered by your favorite LLM.
-
-NekoPilot 是一个运行在 Chrome 侧边栏的浏览器自动化助手。它通过 Chrome DevTools Protocol (CDP) 直接驱动当前标签页，把"看页面 → 思考 → 操作"的循环交给 LLM 完成。BYOK（自带 API Key），数据不经过任何第三方服务。
+NekoPilot 是一个浏览器侧边栏插件。它可以接入 LLM 为你操作浏览器页面。
 
 ![manifest v3](https://img.shields.io/badge/Chrome-MV3-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green) ![pnpm](https://img.shields.io/badge/pnpm-required-orange)
 
@@ -12,91 +10,83 @@ NekoPilot 是一个运行在 Chrome 侧边栏的浏览器自动化助手。它�
 
 ---
 
-## ✨ 特性
+## 特性
 
-- **真实浏览器操控** — 通过 CDP 派发真实鼠标 / 键盘事件，避免被前端检测拦截。
-- **视觉 + 结构混合感知** — 截图、可交互元素列表、简化 DOM 树、文本搜索多管齐下。
-- **多供应商**
-  - OpenAI 兼容 API（OpenAI / DeepSeek / Qwen / Moonshot / 本地 vLLM / Ollama 等）
-  - Anthropic Messages API（Claude）
-- **流式 UI**
-  - 工具调用以时间线形式分组展示，可折叠
-  - `<think>...</think>` 思考过程独立成步骤，并显示「已思考 N 秒」
-  - 实时切换审批 / 自动模式
-- **可控的危险操作** — 默认敏感工具（点击、导航、输入等）需要人工批准；自动模式下也可随时暂停。
-- **完整中断** — 停止按钮立即切断流式连接并清理悬挂的工具调用，对话状态保持一致。
-- **重试不丢失上下文** — 重试某条消息会回滚到该点，保留之前的全部历史。
+- **仿真浏览器控制**：通过 CDP 派发真实鼠标 / 键盘事件，亦可改用 JS 派发。
+- **兼容两种接口**：
+  - OpenAI Completions
+  - Anthropic Messages
+- **权限可控**：可切换审批与自动模式，审批模式下点击、滑动、输入等操作需要人工批准
+- **点选页面元素**：手动选择网页按钮，文本等，将元素信息附加到指令中。
+- **JavaScript 沙箱**：通过轻量 QuickJS 沙箱执行代码，可计算数学问题或分析数据。
+- **截图上下文管理**：对于模型对页面的截图，支持缩放和旧截图清理，控制模型上下文占用。
 
----
+## 工具集
 
-## 🛠️ 工具集
+| 工具 | 作用 |
+| --- | --- |
+| `execute_js` | 在独立沙箱中执行纯 JavaScript 代码，无网络，不可访问页面资源；可在设置中关闭 |
+| `screenshot` | 截屏，支持设置缩放 |
+| `read_page_text` | 读取页面文本（`body.innerText`），支持通过 `limit` / `offset` 分段读取 |
+| `read_page` | 读取简化 DOM 树 |
+| `read_page_interactive` | 列出可见的可交互元素 |
+| `click` | 按坐标或 selector 点击，默认使用 CDP，可改用 JS 点击 |
+| `keyboard_type` | 输入文本、发送按键或组合键，可先聚焦指定元素；文本输入支持 CDP、JS 赋值或逐字符键盘事件 |
+| `scroll` | 在指定位置派发鼠标滚轮事件，支持水平和垂直滚动 |
+| `drag` | 按起点和终点坐标长按拖拽 |
+| `navigate` | 打开指定网址 |
+| `wait` | 等待指定毫秒数 |
+| `find_element` | 按文本搜索元素 |
+| `get_element_text` | 读取指定元素的文本 |
+| `hover` | 按坐标或 selector 移动鼠标，触发悬停效果 |
+| `handle_dialog` | 接受或拒绝原生 alert、confirm、prompt 及 beforeunload 弹窗，可填写 prompt 文本 |
+| `get_element_rect` | 获取指定元素的坐标和尺寸 |
 
-| 工具                                    | 作用                                               |
-| --------------------------------------- | -------------------------------------------------- |
-| `screenshot`                            | 截取当前视口（base64 PNG）                         |
-| `read_page_text`                        | 读取 `body.innerText`，支持分页                    |
-| `read_page`                             | 简化 DOM 树，含位置和 role                         |
-| `read_page_interactive`                 | 列出所有可见可交互元素 + selector + center         |
-| `find_element`                          | 按文本搜索元素，返回 selector 与坐标               |
-| `get_element_text` / `get_element_rect` | 单元素细查                                         |
-| `click`                                 | 坐标或 selector 点击，可切 CDP / `element.click()` |
-| `set_input`                             | 聚焦并输入，可切 CDP `insertText` / 直接赋值       |
-| `scroll` / `drag`                       | 鼠标滚轮 / 拖拽                                    |
-| `navigate` / `wait`                     | URL 跳转、定时等待                                 |
+selector 是 `#n` 元素引用，由各种读取工具返回。
 
 工具定义见 [`src/tools/definitions.ts`](src/tools/definitions.ts)。
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 ### 1. 构建扩展
 
-需要 Node.js 22.13 或更高版本，以及 pnpm 11.19.0（版本固定在 `package.json`）。项目使用官方 npm 源，只允许 `esbuild` 和 `sharp` 执行依赖构建脚本。
+需要 Node.js 22.13 或更高版本，以及 pnpm 11.19.0。
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
 ```
 
-`dev` 模式（watch + 增量构建）：
-
-```bash
-pnpm dev
-```
-
-### 2. 加载到 Chrome
+### 2. 安装到 Chrome（或Edge等Chromium内核浏览器）
 
 1. 打开 `chrome://extensions`
-2. 右上角开启 **开发者模式**
+2. 开启 **开发者模式**
 3. 点击 **加载已解压的扩展程序**，选择仓库内的 `dist` 目录
 
 ### 3. 配置 API
 
-点击扩展图标 → 进入设置（齿轮）：
+点击扩展图标，打开侧边栏 → 点击右下角齿轮进入设置：
 
-- **Provider**：`openai-compatible` 或 `anthropic`
-- **Base URL**：例如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`
+- **接口类型**：`OpenAI` 是 OpenAI Completions 接口，`Anthropic` 是 Anthropic Messages 接口
+- **Base URL**：提供商端点，例如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`
 - **API Key**：你的密钥
-- **Model**：例如 `gpt-5.4`、`claude-sonnet-4.6`
+- **模型**：例如 `gpt-5.6-terra`、`claude-sonnet-5.5`，可点击右侧按钮从模型提供商拉取模型列表
 
 ### 4. 使用
 
-在任意普通网页上打开侧边栏，输入指令开始：
-
-输入框底部提供新建对话、执行模式、元素选择与附件等操作。输入框下方的标签页纸片显示操作目标；空对话会跟随浏览器切换标签页，出现第一条消息后固定目标，并跨消息保持。点击纸片会显示当前操作页和最近访问的四个其他标签页，也可按标题或链接搜索所有打开的标签页；选择后会激活该页并更新操作目标。任务执行或元素选择期间需先结束当前操作再切换。当前聚焦页与操作目标不一致时，元素选择按钮会禁用并提示返回操作页。
-
-首次发送任务时，用户提示词会附带最多 100 字符的页面标题和最多 200 字符的链接；切换操作目标后的下一条提示词也会告知模型已切换页面。页面上下文包在 `<page_context>` 中，标题和链接分别使用 `<title>` 和 `<url>`，截断后转义 XML 特殊字符，用户原始输入放在标签外。只有首条消息和切换后的第一条消息会在气泡下方显示标签页纸片，历史恢复时保留；图标缺失、加载中或加载失败时显示链接图标。
+在任意网页打开插件，输入指令开始。例如：
 
 > 「帮我把这个表单填好后提交」
 > 「找到所有评论里的差评，摘抄给我」
 > 「打开 GitHub trending，把前 5 个项目的标题列出来」
 
-顶栏切换 **Ask（每步审批）/ Auto（自动）**；红色方块按钮立即停止。
+发送指令后，Agent会留在当前标签页继续操作，直接切换标签页不会影响Agent。在底栏可以更改Agent操作的标签页。
 
 ---
 
-## 🧱 项目结构
+## 项目结构
 
 ```
 src/
@@ -125,55 +115,65 @@ src/
 
 数据流概览：
 
-```
-sidepanel  ──message──▶  background (Service Worker)
-                              │
-                              ├─▶ AgentLoop ──HTTP──▶ LLM Provider (SSE 流)
-                              │       │
-                              │       ▼
-                              └─▶ ToolExecutor ──CDP──▶ Active Tab
+```mermaid
+flowchart TD
+    sidepanel["侧边栏 UI"] -->|用户指令 / 操作审批| background["后台 Service Worker"]
+    background -->|启动任务| agent["AgentLoop"]
+    agent -->|HTTP 请求| provider["LLM 提供商"]
+    provider -->|SSE 流式响应 / 工具调用| agent
+    agent -->|执行工具| executor["ToolExecutor"]
+    executor -->|CDP 页面读取 / 操作| target["绑定的目标标签页"]
+    target -->|截图 / 页面数据| executor
+    executor -->|工具结果| agent
+    agent -->|消息 / 工具事件 / 审批请求| background
+    background -->|状态更新| sidepanel
 ```
 
----
-
-## ⚙️ 技术栈
+## 技术栈
 
 - **构建** — Vite 6 + TypeScript 5（严格模式）
 - **UI** — React 19 + shadcn/ui + AI Elements + Tailwind CSS 4
 - **内容渲染** — Streamdown + remark-gfm / remark-math / KaTeX
 - **主题** — shadcn/ui 默认 Neutral 配色，支持明亮、暗黑与跟随系统
 - **运行时** — Chrome MV3 Service Worker
-- **包管理** — pnpm（必须）
+- **包管理器** — pnpm
 
----
+## 隐私
 
-## 🔒 隐私
-
-- API Key 仅保存在 `chrome.storage.local`，绝不外传。
-- 所有 LLM 请求由扩展直连你配置的 endpoint，**不经过任何中间服务器**。
+- API Key 仅保存在本地浏览器的 `chrome.storage.local`。
+- 所有 LLM 请求由扩展直连你配置的提供商。
 - 截图、页面文本只发送给你选定的模型。
 
----
+## 贡献
 
-## 🤝 贡献
+欢迎 issue 与 PR。
 
-欢迎 issue 与 PR。提交前请：
+进入开发模式（watch + 增量构建）：
+
+```bash
+pnpm dev
+```
+
+提交前请：
 
 ```bash
 pnpm build       # 必须通过 tsc 严格检查
 pnpm test:ui     # 生产构建 + 浏览器 UI 回归检查
 ```
 
-UI 检查默认使用已安装的 Chrome，模拟扩展消息与存储，并应用与扩展相同的脚本 CSP。覆盖审批、停止、重试、历史恢复、主题同步、附件标签、流式公式和窄侧边栏布局；真实 CDP 操作与模型 API 需在加载扩展后验证。可通过 `PLAYWRIGHT_CHANNEL` 选择其他已安装的浏览器通道。
+UI 检查默认使用已安装的 Chrome，可通过 `PLAYWRIGHT_CHANNEL` 选择其他已安装的浏览器通道。
 
-常规回归以行为断言为准，失败时保留截图和追踪。需要人工检查审批界面与设置页的明暗主题时，单独运行 `pnpm test:ui:screenshots`；截图输出到 `test-results/` 和 `artifacts/ui/`，不进行自动图片比较。
+需要人工检查页面截图时，运行 `pnpm test:ui:screenshots`；截图输出到 `test-results/` 和 `artifacts/ui/`。
 
-组件源码直接保存在仓库中。`PromptInput` 的 `onFilesAdded` 接口让扩展沿用原始 `File` 状态；网页上的元素选择框和操作标记继续由原有 CDP 代码维护。当前附件沿用既有行为，仅在聊天中展示文件名，未增加文件内容上传协议。
+提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 风格。
 
-提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 风格（`feat:` / `fix:` / `refactor:` ...）。
+## TODOs
 
----
+- [ ] 支持附件上传（对的，现在的附件按钮只是摆设）
+- [ ] 历史对话保存
+- [ ] 支持多标签页操作
+- [ ] 为其它harness暴露MCP接口
 
-## 📄 License
+## License
 
 [Apache License 2.0](LICENSE)

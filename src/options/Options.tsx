@@ -184,7 +184,7 @@ export default function Options({
           description="连接模型服务，修改后自动保存。"
         >
           <SelectField
-            label="提供商"
+            label="接口类型"
             value={settings.provider}
             onChange={handleProviderChange}
             options={[
