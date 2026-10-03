@@ -183,7 +183,11 @@ export default function App() {
         setLogs((previous) =>
           previous.map((entry) =>
             entry.id === binding.messageId
-              ? { ...entry, targetTab: binding.target }
+              ? {
+                  ...entry,
+                  targetTab: binding.target,
+                  showTargetTabChip: binding.showChip,
+                }
               : entry,
           ),
         );
@@ -1064,6 +1068,19 @@ export default function App() {
 
   const segments = useMemo(() => groupLogs(logs), [logs]);
   const turns = useMemo(() => groupIntoTurns(segments), [segments]);
+  const targetChipIds = useMemo(() => {
+    const ids = new Set<number>();
+    let previousUser: LogEntry | undefined;
+    for (const entry of logs) {
+      if (entry.type !== "user") continue;
+      const showChip =
+        entry.showTargetTabChip ??
+        (!previousUser || previousUser.targetTab?.id !== entry.targetTab?.id);
+      if (showChip && entry.targetTab) ids.add(entry.id);
+      previousUser = entry;
+    }
+    return ids;
+  }, [logs]);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<number>>(
     new Set(),
   );
@@ -1118,7 +1135,7 @@ export default function App() {
         onWheelCapture={logsScroll.onWheelCapture}
         onPointerDownCapture={logsScroll.onPointerDownCapture}
         onKeyDownCapture={logsScroll.onKeyDownCapture}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]"
       >
         {turns.length === 0 && (
           <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
@@ -1153,7 +1170,7 @@ export default function App() {
                     </div>
                   )}
                 </MessageContent>
-                {entry.targetTab && (
+                {entry.targetTab && targetChipIds.has(entry.id) && (
                   <div
                     data-slot="message-target-tab"
                     className="flex max-w-full self-end"

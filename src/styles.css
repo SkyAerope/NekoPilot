@@ -80,6 +80,7 @@
 @layer base {
   * {
     @apply border-border;
+    scrollbar-width: thin;
   }
   body {
     @apply m-0 bg-background text-foreground antialiased;

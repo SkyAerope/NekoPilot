@@ -298,7 +298,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           chrome.runtime
             .sendMessage({
               type: "target:bound",
-              payload: { messageId, target },
+              payload: { messageId, target, showChip: firstTurn || switched },
             })
             .catch(() => {});
         }

@@ -32,6 +32,7 @@ export interface LogEntry {
   prunedFromContext?: boolean;
   pickedElements?: PickedElement[];
   targetTab?: TargetTab;
+  showTargetTabChip?: boolean;
   // thinking 相关
   thinkingDone?: boolean;
   thinkSeconds?: number;

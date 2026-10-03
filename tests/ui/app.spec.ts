@@ -7,7 +7,12 @@ type Harness = {
   storage: Record<string, unknown>;
   messages: { type: string; payload?: Record<string, unknown> }[];
   emit: (event: AgentEvent) => void;
-  bindTarget: (messageId: number, target: TargetTab) => void;
+  bindTarget: (
+    messageId: number,
+    target: TargetTab,
+    showChip?: boolean,
+  ) => void;
+  lastPromptTabId?: number;
   targetStatus: TargetTabStatus;
   switchError?: string;
   statusError?: string;
@@ -64,9 +69,12 @@ async function installHarness(
         messageListeners.forEach((listener) =>
           listener({ type: "agent:event", payload: event }),
         ),
-      bindTarget: (messageId, target) =>
+      bindTarget: (messageId, target, showChip = true) =>
         messageListeners.forEach((listener) =>
-          listener({ type: "target:bound", payload: { messageId, target } }),
+          listener({
+            type: "target:bound",
+            payload: { messageId, target, showChip },
+          }),
         ),
     };
     const chromeMock = {
@@ -95,13 +103,16 @@ async function installHarness(
             harness.bindTarget(
               message.payload.messageId,
               harness.targetStatus.target,
+              harness.lastPromptTabId !== harness.targetStatus.target.id,
             );
+            harness.lastPromptTabId = harness.targetStatus.target.id;
           }
           if (message.type === "target:status" && harness.followingActive) {
             harness.targetStatus.target = harness.targetStatus.active;
             if (message.payload?.hasMessages) harness.followingActive = false;
           }
           if (message.type === "agent:reset") {
+            harness.lastPromptTabId = undefined;
             harness.followingActive = true;
             harness.targetStatus.target = harness.targetStatus.active;
           }
@@ -429,6 +440,56 @@ test("后台绑定修正气泡页面快照，失败图标显示链接占位", as
   await expect(paper).toHaveText("实际连接页面");
   await expect(paper.locator("img")).toHaveCount(0);
   await expect(paper.locator(".lucide-link")).toBeVisible();
+});
+
+test("连续消息只在首条和切页后的首条显示纸片，旧历史也按此规则恢复", async ({
+  page,
+}) => {
+  const tabs: TargetTab[] = [
+    { id: 1, title: "页面 A", url: "https://example.invalid/a" },
+    { id: 2, title: "页面 B", url: "https://example.invalid/b" },
+  ];
+  await installHarness(page, {
+    tabs,
+    targetStatus: {
+      target: tabs[0],
+      active: tabs[0],
+      missing: false,
+      busy: false,
+    },
+  });
+  await page.goto("/sidepanel.html");
+  const send = async (text: string) => {
+    await page.getByRole("textbox", { name: "任务内容" }).fill(text);
+    await page.getByRole("button", { name: "发送消息", exact: true }).click();
+    await emit(page, "done", "");
+  };
+  const papers = page.locator('[data-slot="message-target-tab"]');
+  await send("第一条");
+  await expect(papers).toHaveText(["页面 A"]);
+  await send("第二条");
+  await expect(papers).toHaveText(["页面 A"]);
+  await page.getByRole("button", { name: "操作标签页", exact: true }).click();
+  await page.getByRole("option", { name: "页面 B", exact: true }).click();
+  await send("切换后第一条");
+  await expect(papers).toHaveText(["页面 A", "页面 B"]);
+  await send("切换后第二条");
+  await expect(papers).toHaveText(["页面 A", "页面 B"]);
+  const reopened = await page.context().newPage();
+  await installHarness(reopened, {
+    chatLogs: [0, 1, 2, 3].map((index) => ({
+      id: index + 1,
+      type: "user",
+      content: `历史消息 ${index}`,
+      timestamp: index,
+      targetTab: tabs[index < 2 ? 0 : 1],
+    })),
+  });
+  await reopened.goto("/sidepanel.html");
+  await expect(reopened.locator('[data-slot="message-target-tab"]')).toHaveText(
+    ["页面 A", "页面 B"],
+  );
+  await reopened.close();
 });
 
 test("标签页菜单置顶目标、显示四个最近页，并按标题链接搜索全部标签页", async ({

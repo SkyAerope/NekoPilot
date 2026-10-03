@@ -16,4 +16,5 @@ export interface TargetTabStatus {
 export interface TargetTabBinding {
   messageId: number;
   target: TargetTab;
+  showChip: boolean;
 }
