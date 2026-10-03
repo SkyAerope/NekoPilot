@@ -292,7 +292,7 @@ test("输入区显示图标操作与标签页纸片，窄侧栏不溢出", async
   const mode = page.getByRole("button", { name: "自动模式", exact: true });
   await expect(mode).toHaveText("");
   await mode.hover();
-  await expect(page.getByRole("tooltip")).toHaveText("切换审核模式");
+  await expect(page.getByRole("tooltip")).toHaveText("切换审批模式");
   await mode.click();
   await expect(
     page.getByRole("menuitemradio", { name: "执行前询问" }),

@@ -1407,7 +1407,7 @@ export default function App() {
                       </PromptInputButton>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
-                  <TooltipContent>切换审核模式</TooltipContent>
+                  <TooltipContent>切换审批模式</TooltipContent>
                 </Tooltip>
                 <DropdownMenuContent side="top" align="start">
                   <DropdownMenuRadioGroup
@@ -1428,7 +1428,7 @@ export default function App() {
                       className="cursor-pointer"
                     >
                       <Hand className="size-4" />
-                      执行前询问
+                      需要审批
                     </DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>

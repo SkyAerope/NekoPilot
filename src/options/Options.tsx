@@ -181,7 +181,7 @@ export default function Options({
       <main className="mx-auto grid max-w-2xl gap-6 px-6 py-8">
         <SettingsSection
           title="LLM 提供商"
-          description="连接你的模型服务，修改后自动保存。"
+          description="连接模型服务，修改后自动保存。"
         >
           <SelectField
             label="提供商"
@@ -255,6 +255,12 @@ export default function Options({
           title="元素选择器"
           description="控制页面元素引用与操作提示。"
         >
+          <SwitchField
+            label="启用 #n 简短元素引用"
+            description="为元素提供形如 #114 的自增编号短引用，执行时自动还原为 CSS 选择器。"
+            checked={settings.enableShortRefs}
+            onChange={(value) => updateSettings({ enableShortRefs: value })}
+          />
           <TextField
             label="元素文本截取长度"
             type="number"
@@ -269,24 +275,18 @@ export default function Options({
           />
           <SwitchField
             label="Click 操作时标记坐标位置"
-            description="在 Ask 模式下，等待审批时在页面上显示点击位置标记。"
+            description="等待审批时在页面上显示点击位置标记。"
             checked={settings.showClickMarker}
             onChange={(value) => updateSettings({ showClickMarker: value })}
           />
         </SettingsSection>
         <SettingsSection
           title="工具行为"
-          description="配置元素引用、沙箱执行与截图上下文。"
+          description="配置沙箱执行与截图上下文。"
         >
           <SwitchField
-            label="启用 #n 简短元素引用"
-            description="为可交互元素提供 #1 形式的短引用，执行时自动还原为 CSS 选择器；编号在一次对话内自增。"
-            checked={settings.enableShortRefs}
-            onChange={(value) => updateSettings({ enableShortRefs: value })}
-          />
-          <SwitchField
-            label="启用 execute_js 沙箱代码执行"
-            description="在独立 QuickJS 沙箱中执行纯 JavaScript 计算，无 DOM、网络或扩展 API；Ask 模式下仍需审批。"
+            label="启用 execute_js 沙箱代码执行工具"
+            description="在独立 QuickJS 沙箱中执行纯 JavaScript 计算，无 DOM、网络或扩展 API；审批模式下需审批。"
             checked={settings.enableCodeExecution}
             onChange={(value) => updateSettings({ enableCodeExecution: value })}
           />
@@ -338,8 +338,8 @@ export default function Options({
             }
             options={[
               ["off", "关"],
-              ["claude46", "1568（Claude 4.6）"],
-              ["claude47", "2576（Claude 4.7）"],
+              ["claude46", "1568（Claude 4.6 及更低版本）"],
+              ["claude47", "2576（Claude 4.7 及更高版本）"],
               ["custom", "自定义"],
             ]}
           />
@@ -373,25 +373,25 @@ export default function Options({
             </div>
           )}
           <p className="text-xs leading-relaxed text-muted-foreground">
-            截图按最长边与总像素限制等比缩放，页面操作坐标保持原始视口坐标。
+            截图按最长边与总像素限制等比缩放，页面坐标与模型输出坐标将自动转换。
           </p>
           <SwitchField
-            label="启用截图上下文裁剪"
-            description="旧截图从模型上下文移除并替换为占位文本，侧边栏缩略图保留。"
+            label="启用截图清理"
+            description="上下文中的截图达到阈值时，将更早的截图替换为占位文本。截图始终显示在用户界面。"
             checked={settings.enableScreenshotPruning}
             onChange={(value) =>
               updateSettings({ enableScreenshotPruning: value })
             }
           />
           <SliderField
-            label="截图保留与裁剪阈值"
+            label="截图保留与清理阈值"
             value={[settings.screenshotKeepN, settings.screenshotPruneTrigger]}
             min={1}
             max={30}
             step={1}
             minStepsBetweenThumbs={1}
             disabled={!settings.enableScreenshotPruning}
-            display={`保留 ${settings.screenshotKeepN} 张 / 达到 ${settings.screenshotPruneTrigger} 张时裁剪`}
+            display={`清理时保留最新 ${settings.screenshotKeepN} 张 / 达到 ${settings.screenshotPruneTrigger} 张时清理`}
             marks={[
               [1, "1"],
               [10, "10"],
@@ -423,7 +423,7 @@ function SettingsSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="text-lg">{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">{children}</CardContent>
