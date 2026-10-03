@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { TargetTab, TargetTabStatus } from "../../src/shared/target-tab";
 
 type AgentEvent = { type: string; data: unknown };
@@ -7,6 +7,9 @@ type Harness = {
   storage: Record<string, unknown>;
   messages: { type: string; payload?: Record<string, unknown> }[];
   emit: (event: AgentEvent) => void;
+  notifyTargetChanged: () => void;
+  emitTabEvent: (type: string) => void;
+  statusDelay?: number;
   bindTarget: (
     messageId: number,
     target: TargetTab,
@@ -46,6 +49,15 @@ async function installHarness(
     const messageListeners = new Set<(message: unknown) => void>();
     const storageListeners = new Set<(changes: unknown) => void>();
     const messages: Harness["messages"] = [];
+    const tabListeners = new Map<string, Set<() => void>>();
+    const tabEvent = (type: string) => {
+      const listeners = new Set<() => void>();
+      tabListeners.set(type, listeners);
+      return {
+        addListener: (listener: () => void) => listeners.add(listener),
+        removeListener: (listener: () => void) => listeners.delete(listener),
+      };
+    };
     const changed = {
       addListener: (listener: (changes: unknown) => void) =>
         storageListeners.add(listener),
@@ -69,6 +81,12 @@ async function installHarness(
         messageListeners.forEach((listener) =>
           listener({ type: "agent:event", payload: event }),
         ),
+      notifyTargetChanged: () =>
+        messageListeners.forEach((listener) =>
+          listener({ type: "target:changed" }),
+        ),
+      emitTabEvent: (type) =>
+        tabListeners.get(type)?.forEach((listener) => listener()),
       bindTarget: (messageId, target, showChip = true) =>
         messageListeners.forEach((listener) =>
           listener({
@@ -78,6 +96,12 @@ async function installHarness(
         ),
     };
     const chromeMock = {
+      tabs: {
+        onCreated: tabEvent("created"),
+        onRemoved: tabEvent("removed"),
+        onUpdated: tabEvent("updated"),
+        onActivated: tabEvent("activated"),
+      },
       runtime: {
         lastError: undefined,
         onMessage: {
@@ -164,7 +188,13 @@ async function installHarness(
                           },
                         }
                       : {};
-          if (message.type === "target:list" && initialStorage.tabListDelay) {
+          if (message.type === "target:status" && harness.statusDelay) {
+            const snapshot = structuredClone(result);
+            window.setTimeout(() => callback(snapshot), harness.statusDelay);
+          } else if (
+            message.type === "target:list" &&
+            initialStorage.tabListDelay
+          ) {
             window.setTimeout(
               () => callback(structuredClone(result)),
               Number(initialStorage.tabListDelay),
@@ -328,6 +358,7 @@ test("旧后台提示重新加载，恢复状态后自动清除提示", async ({
   expect(await page.evaluate(() => window.__harness.reloadCount)).toBe(1);
   await page.evaluate(() => {
     window.__harness.statusError = undefined;
+    window.__harness.notifyTargetChanged();
   });
   await expect(
     page.getByRole("button", { name: "操作标签页", exact: true }),
@@ -336,6 +367,154 @@ test("旧后台提示重新加载，恢复状态后自动清除提示", async ({
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeEnabled();
+});
+
+test("操作目标依赖状态通知刷新，空闲时不轮询，任务清理后恢复按钮", async ({
+  page,
+}) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  const send = page.getByRole("button", { name: "发送消息", exact: true });
+  await expect(chip).toHaveText("示例页面");
+  await page.getByRole("textbox", { name: "任务内容" }).fill("执行任务");
+  const count = () =>
+    page.evaluate(
+      () =>
+        window.__harness.messages.filter(
+          (message) => message.type === "target:status",
+        ).length,
+    );
+  const initialCount = await count();
+  await page.waitForTimeout(1200);
+  expect(await count()).toBe(initialCount);
+  await page.evaluate(() => {
+    window.__harness.targetStatus.busy = true;
+    window.__harness.notifyTargetChanged();
+  });
+  await expect(send).toBeDisabled();
+  await page.evaluate(() => {
+    window.__harness.emit({ type: "done", data: "" });
+  });
+  await expect(send).toBeDisabled();
+  await page.evaluate(() => {
+    window.__harness.targetStatus.busy = false;
+    window.__harness.targetStatus.target!.title = "更新后的操作页";
+    window.__harness.notifyTargetChanged();
+  });
+  await expect(chip).toHaveText("更新后的操作页");
+  await expect(send).toBeEnabled();
+});
+
+test("状态查询期间的新通知丢弃旧响应，并合并重复通知", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  await expect(chip).toHaveText("示例页面");
+  const initialCount = await page.evaluate(
+    () =>
+      window.__harness.messages.filter(
+        (message) => message.type === "target:status",
+      ).length,
+  );
+  await page.evaluate(() => {
+    window.__harness.statusDelay = 250;
+    window.__harness.targetStatus.target!.title = "过期页面";
+    window.__harness.notifyTargetChanged();
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__harness.messages.filter(
+            (message) => message.type === "target:status",
+          ).length,
+      ),
+    )
+    .toBe(initialCount + 1);
+  await page.evaluate(() => {
+    window.__harness.statusDelay = 0;
+    window.__harness.targetStatus.target!.title = "最新页面";
+    for (let index = 0; index < 5; index++)
+      window.__harness.notifyTargetChanged();
+    const records: string[] = [];
+    new MutationObserver(() =>
+      records.push(
+        document.querySelector('[aria-label="操作标签页"]')?.textContent || "",
+      ),
+    ).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+    Object.assign(window, { statusTitles: records });
+  });
+  await expect(chip).toHaveText("最新页面");
+  expect(
+    await page.evaluate(
+      () =>
+        window.__harness.messages.filter(
+          (message) => message.type === "target:status",
+        ).length,
+    ),
+  ).toBe(initialCount + 2);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { statusTitles: string[] }).statusTitles,
+    ),
+  ).not.toContain("过期页面");
+});
+
+test("临时状态查询失败支持重试和恢复可见时刷新", async ({ page }) => {
+  await installHarness(page, { statusError: "临时连接失败" });
+  await page.goto("/sidepanel.html");
+  await expect(page.getByRole("alert")).toContainText("临时连接失败");
+  await page.evaluate(() => {
+    window.__harness.statusError = undefined;
+  });
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  const chip = page.getByRole("button", { name: "操作标签页", exact: true });
+  await expect(chip).toHaveText("示例页面");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.evaluate(() => {
+    window.__harness.targetStatus.target!.title = "恢复后的页面";
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(chip).toHaveText("恢复后的页面");
+});
+
+test("后台重置通知只查询状态，不因旧聊天记录重新固定操作目标", async ({
+  page,
+}) => {
+  await installHarness(page, {
+    chatLogs: [{ id: 1, type: "user", content: "旧任务", timestamp: 1 }],
+  });
+  await page.goto("/sidepanel.html");
+  await expect(
+    page.getByRole("button", { name: "操作标签页", exact: true }),
+  ).toHaveText("示例页面");
+  await page.evaluate(() => {
+    window.__harness.messages.length = 0;
+    window.__harness.notifyTargetChanged();
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__harness.messages.filter(
+            (message) => message.type === "target:status",
+          ).length,
+      ),
+    )
+    .toBe(1);
+  expect(
+    await page.evaluate(
+      () =>
+        window.__harness.messages.find(
+          (message) => message.type === "target:status",
+        )?.payload?.hasMessages,
+    ),
+  ).toBe(false);
 });
 
 test("用户气泡下方保存标签页纸片，图标加载时占位，切换与恢复不改旧纸片", async ({
@@ -645,6 +824,7 @@ test("空对话切页更新纸片并清理元素引用，首条消息后保持�
       title: "页面 B",
       url: "https://example.invalid/b",
     };
+    window.__harness.emitTabEvent("activated");
   });
   await expect(chip).toHaveText("页面 B");
   await expect(
@@ -1590,6 +1770,121 @@ test("思考过程与多步工具的混合时间线展示", async ({ page }) => 
     animations: "disabled",
   });
 });
+
+for (const theme of ["light", "dark"] as const) {
+  for (const tab of ["代码", "参数", "结果"]) {
+    test(`空闲工具详情拖选保持选区：${tab} ${theme}`, async ({
+      page,
+    }, testInfo) => {
+      await page.emulateMedia({ colorScheme: theme });
+      await installHarness(page, {
+        chatLogs: [
+          {
+            id: 1,
+            type: "tool_call",
+            toolName: tab === "参数" ? "read_page" : "execute_js",
+            toolCallId: "selection-repro",
+            content: JSON.stringify(
+              tab === "参数"
+                ? {
+                    selector: "#sample",
+                    options: { firstValue: "alpha", secondValue: "beta" },
+                  }
+                : {
+                    code: 'const firstValue = "alpha";\nconst secondValue = "beta";\nconst thirdValue = "gamma";\nconsole.log(firstValue, secondValue, thirdValue);',
+                  },
+            ),
+            toolResult: JSON.stringify({
+              firstValue: "alpha",
+              secondValue: "beta",
+              thirdValue: "gamma",
+            }),
+            toolSuccess: true,
+            timestamp: 1,
+          },
+        ],
+      });
+      await page.goto("/sidepanel.html");
+      await page
+        .getByRole("button", {
+          name: tab === "参数" ? /Read page structure/ : /Run JS/,
+        })
+        .click();
+      await page.getByRole("tab", { name: tab, exact: true }).click();
+      const code = page.locator("pre.shiki:visible code");
+      await expect(code).toBeVisible();
+      await code.evaluate((element) => {
+        const records: unknown[] = [];
+        const originalNode = element.firstChild;
+        const sample = (type: string) => {
+          const selection = window.getSelection();
+          records.push({
+            type,
+            time: performance.now(),
+            text: selection?.toString(),
+            anchorOffset: selection?.anchorOffset,
+            focusOffset: selection?.focusOffset,
+            originalNodeConnected: originalNode?.isConnected,
+          });
+        };
+        document.addEventListener("selectionchange", () => sample("selection"));
+        new MutationObserver(() => sample("mutation")).observe(
+          element.parentElement!.parentElement!,
+          { childList: true, subtree: true },
+        );
+        Object.assign(window, { selectionRecords: records });
+      });
+      const box = (await code.boundingBox())!;
+      await page.mouse.move(box.x + 10, box.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 125, box.y + 40, { steps: 15 });
+      const before = await page.evaluate(() =>
+        window.getSelection()?.toString(),
+      );
+      expect(before?.length).toBeGreaterThan(0);
+      // 无关状态刷新也不能重写代码节点或清除正在拖动的选区。
+      await page.evaluate(() => window.__harness.notifyTargetChanged());
+      await page.waitForTimeout(2200);
+      const after = await page.evaluate(() =>
+        window.getSelection()?.toString(),
+      );
+      await page.mouse.move(box.x + 160, box.y + 57, { steps: 10 });
+      await page.mouse.up();
+      const continued = await page.evaluate(() =>
+        window.getSelection()?.toString(),
+      );
+      await page.evaluate(() => window.__harness.notifyTargetChanged());
+      await page.waitForTimeout(1100);
+      expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(
+        continued,
+      );
+      const records = await page.evaluate(
+        () =>
+          (window as unknown as { selectionRecords: unknown[] })
+            .selectionRecords,
+      );
+      const evidence = JSON.stringify(
+        { tab, before, after, continued, records },
+        null,
+        2,
+      );
+      await writeFile(testInfo.outputPath("selection-events.json"), evidence);
+      await testInfo.attach("selection-events", {
+        body: evidence,
+        contentType: "application/json",
+      });
+      await page.screenshot({ path: testInfo.outputPath("selection.png") });
+      expect(after).toBe(before);
+      expect(
+        records.every(
+          (record) =>
+            (record as { originalNodeConnected: boolean })
+              .originalNodeConnected,
+        ),
+      ).toBe(true);
+    });
+  }
+}
 
 for (const theme of ["light", "dark"]) {
   test(`多步工具详情标签页与审批布局：${theme}`, async ({ page }) => {

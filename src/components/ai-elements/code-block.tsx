@@ -9,6 +9,7 @@ import {
   type HTMLAttributes,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import type { BundledLanguage, ShikiTransformer } from "shiki";
@@ -99,6 +100,9 @@ export const CodeBlock = ({
 }: CodeBlockProps) => {
   const [html, setHtml] = useState<string>("");
   const [darkHtml, setDarkHtml] = useState<string>("");
+  // 保持属性对象稳定，避免无关渲染重写文本节点并破坏原生选区。
+  const lightMarkup = useMemo(() => ({ __html: html }), [html]);
+  const darkMarkup = useMemo(() => ({ __html: darkHtml }), [darkHtml]);
   useEffect(() => {
     let cancelled = false;
     highlightCode(code, language, showLineNumbers)
@@ -137,11 +141,11 @@ export const CodeBlock = ({
           )}
           <div
             className="overflow-auto dark:hidden [&>pre]:m-0 [&>pre]:bg-background! [&>pre]:p-4 [&>pre]:text-foreground! [&>pre]:text-sm [&_code]:font-mono [&_code]:text-sm"
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={lightMarkup}
           />
           <div
             className="hidden overflow-auto dark:block [&>pre]:m-0 [&>pre]:bg-background! [&>pre]:p-4 [&>pre]:text-foreground! [&>pre]:text-sm [&_code]:font-mono [&_code]:text-sm"
-            dangerouslySetInnerHTML={{ __html: darkHtml }}
+            dangerouslySetInnerHTML={darkMarkup}
           />
           {children && (
             <div className="absolute top-2 right-2 flex items-center gap-2">

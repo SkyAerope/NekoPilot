@@ -44,6 +44,16 @@ let targetTabId: number | null = null;
 let targetPinned = false;
 let targetPinPending: Promise<void> | null = null;
 let targetRevision = 0;
+let targetNotificationPending = false;
+
+function notifyTargetChanged(): void {
+  if (targetNotificationPending) return;
+  targetNotificationPending = true;
+  queueMicrotask(() => {
+    targetNotificationPending = false;
+    chrome.runtime.sendMessage({ type: "target:changed" }).catch(() => {});
+  });
+}
 const targetReady = chrome.storage.session
   .get(["targetTabId", "targetTabPinned"])
   .then((data) => {
@@ -88,6 +98,7 @@ async function selectTargetTab(
   if (targetTabId !== tab.id) tools.resetShortRefs();
   targetTabId = tab.id!;
   targetPinned = nextPinned;
+  notifyTargetChanged();
 }
 
 async function getTargetStatus(hasMessages = false): Promise<TargetTabStatus> {
@@ -189,6 +200,7 @@ chrome.action.onClicked.addListener((_tab) => {
 
 // 处理来自 side panel / options 的消息
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "target:changed") return;
   handleMessage(message)
     .then(sendResponse)
     .catch((err) => sendResponse({ error: String(err) }));
@@ -214,6 +226,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       if (agentBusy || targetChanging || pickerBusy)
         throw new Error("请先结束任务或元素选择，再切换标签页。");
       targetChanging = true;
+      notifyTargetChanged();
       try {
         await Promise.all([targetReady, historyReady, targetPinPending]);
         const { tabId } = message.payload as { tabId: number };
@@ -233,6 +246,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         return { ...(await getTargetStatus()), busy: false };
       } finally {
         targetChanging = false;
+        notifyTargetChanged();
       }
     }
     // ── CDP 相关 ──
@@ -267,6 +281,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       if (agentBusy || targetChanging || pickerBusy)
         throw new Error("上一个任务或页面选择尚未结束，请稍后重试。");
       agentBusy = true;
+      notifyTargetChanged();
       stopRequested = false;
       try {
         await targetPinPending;
@@ -352,6 +367,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         }
       } finally {
         agentBusy = false;
+        notifyTargetChanged();
       }
     }
     case "agent:stop": {
@@ -368,6 +384,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       if (agentBusy || targetChanging || pickerBusy)
         throw new Error("请先结束任务或页面选择，再新建对话。");
       targetChanging = true;
+      notifyTargetChanged();
       // 清空前发出的状态请求不能在清空后重新固定目标。
       targetRevision++;
       try {
@@ -390,6 +407,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         return { ok: true };
       } finally {
         targetChanging = false;
+        notifyTargetChanged();
       }
     }
     case "agent:truncateBeforeUserTurn": {
@@ -406,6 +424,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         agentLoop = null;
       }
       tools.removeClickMarker().catch(() => {});
+      notifyTargetChanged();
       return { ok: true, remaining: conversationHistory.length };
     }
     case "agent:approve": {
@@ -437,6 +456,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       if (agentBusy || targetChanging || pickerBusy)
         throw new Error("请先结束任务或页面选择，再选择页面元素。");
       pickerBusy = true;
+      notifyTargetChanged();
       try {
         const tab = await getTargetTab();
         const active = await getActiveTab();
@@ -559,6 +579,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         return { element: null, timeout: true };
       } finally {
         pickerBusy = false;
+        notifyTargetChanged();
       }
     }
 

@@ -557,24 +557,55 @@ export default function App() {
   const hasMessages = logs.some(
     (log) => log.type === "user" || log.type === "assistant",
   );
-  const refreshTargetStatus = useCallback(async () => {
+  const hasMessagesRef = useRef(hasMessages);
+  hasMessagesRef.current = hasMessages;
+  const targetRefreshRef = useRef<Promise<void> | null>(null);
+  const targetRefreshRevisionRef = useRef(0);
+  const targetPinRequestedRef = useRef(false);
+  const targetStatusMountedRef = useRef(false);
+  const refreshTargetStatus = useCallback(async (pinFromMessages = false) => {
+    targetPinRequestedRef.current ||= pinFromMessages;
+    targetRefreshRevisionRef.current++;
+    if (targetRefreshRef.current) return targetRefreshRef.current;
+    // 合并同一轮事件；查询途中发生变化时丢弃旧结果，再取一次最新状态。
+    const request = Promise.resolve().then(async () => {
+      let revision: number;
+      do {
+        revision = targetRefreshRevisionRef.current;
+        // 仅在恢复历史或出现首条消息时固定目标，状态通知本身不应重新固定刚重置的目标。
+        const pinTarget = targetPinRequestedRef.current;
+        targetPinRequestedRef.current = false;
+        try {
+          const status = await sendMessage<TargetTabStatus>("target:status", {
+            hasMessages:
+              pinTarget && logsLoadedRef.current && hasMessagesRef.current,
+          });
+          if (!targetStatusMountedRef.current) return;
+          if (revision !== targetRefreshRevisionRef.current) continue;
+          setTargetStatus(status);
+          setTargetStatusError(null);
+        } catch (error) {
+          if (!targetStatusMountedRef.current) return;
+          if (revision !== targetRefreshRevisionRef.current) continue;
+          const message = getErrorMessage(error);
+          const needsReload = message === "Unknown message type: target:status";
+          setTargetStatus(null);
+          setTargetStatusError({
+            message: needsReload
+              ? "扩展后台仍是旧版本，请重新加载扩展。"
+              : message,
+            needsReload,
+          });
+        }
+      } while (revision !== targetRefreshRevisionRef.current);
+    });
+    targetRefreshRef.current = request;
     try {
-      setTargetStatus(
-        await sendMessage<TargetTabStatus>("target:status", {
-          hasMessages: logsLoadedRef.current && hasMessages,
-        }),
-      );
-      setTargetStatusError(null);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      const needsReload = message === "Unknown message type: target:status";
-      setTargetStatus(null);
-      setTargetStatusError({
-        message: needsReload ? "扩展后台仍是旧版本，请重新加载扩展。" : message,
-        needsReload,
-      });
+      await request;
+    } finally {
+      targetRefreshRef.current = null;
     }
-  }, [hasMessages]);
+  }, []);
 
   useEffect(() => {
     setPickedElements([]);
@@ -582,21 +613,33 @@ export default function App() {
 
   // 空对话跟随活动页；出现消息后，后台保持操作目标。
   useEffect(() => {
-    void refreshTargetStatus();
+    targetStatusMountedRef.current = true;
+    void refreshTargetStatus(true);
     const refresh = () => void refreshTargetStatus();
+    const onMessage = (message: { type: string }) => {
+      if (message.type === "target:changed") refresh();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    document.addEventListener("visibilitychange", onVisible);
+    chrome.tabs?.onCreated?.addListener(refresh);
     chrome.tabs?.onActivated?.addListener(refresh);
     chrome.tabs?.onUpdated?.addListener(refresh);
     chrome.tabs?.onRemoved?.addListener(refresh);
     chrome.windows?.onFocusChanged?.addListener(refresh);
-    const timer = window.setInterval(() => void refreshTargetStatus(), 1000);
     return () => {
-      window.clearInterval(timer);
+      targetStatusMountedRef.current = false;
+      chrome.runtime.onMessage.removeListener(onMessage);
+      document.removeEventListener("visibilitychange", onVisible);
+      chrome.tabs?.onCreated?.removeListener(refresh);
       chrome.tabs?.onActivated?.removeListener(refresh);
       chrome.tabs?.onUpdated?.removeListener(refresh);
       chrome.tabs?.onRemoved?.removeListener(refresh);
       chrome.windows?.onFocusChanged?.removeListener(refresh);
     };
-  }, [refreshTargetStatus]);
+  }, [refreshTargetStatus, hasMessages]);
 
   const setAutoModeAndPersist = useCallback((value: boolean) => {
     setAutoMode(value);
@@ -612,11 +655,10 @@ export default function App() {
       setSwitchingTab(true);
       setTargetError(null);
       try {
-        setTargetStatus(
-          await sendMessage<TargetTabStatus>("target:switch", {
-            tabId: Number(tabId),
-          }),
-        );
+        await sendMessage<TargetTabStatus>("target:switch", {
+          tabId: Number(tabId),
+        });
+        await refreshTargetStatus();
         setPickedElements([]);
       } catch (error) {
         setTargetError(getErrorMessage(error));
@@ -795,12 +837,8 @@ export default function App() {
     setPickedElements([]);
     setTargetError(null);
     chrome.storage.local.remove(["chatLogs", "chatMeta"]);
-    setTargetStatus(
-      await sendMessage<TargetTabStatus>("target:status", {
-        hasMessages: false,
-      }),
-    );
-  }, []);
+    await refreshTargetStatus();
+  }, [refreshTargetStatus]);
 
   const handleApprove = useCallback((toolCallId: string) => {
     sendMessage("agent:approve");
@@ -1513,7 +1551,7 @@ export default function App() {
             <p className="min-w-0 flex-1 break-words">
               {targetStatusError.message}
             </p>
-            {targetStatusError.needsReload && (
+            {targetStatusError.needsReload ? (
               <Button
                 type="button"
                 variant="outline"
@@ -1523,6 +1561,16 @@ export default function App() {
                 onClick={() => chrome.runtime.reload()}
               >
                 重新加载扩展
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={() => void refreshTargetStatus(true)}
+              >
+                重试
               </Button>
             )}
           </div>

@@ -138,6 +138,7 @@ function createBackground(session: Record<string, unknown> = {}) {
       __DEV_RELOAD__: false,
       console,
       setTimeout,
+      queueMicrotask,
     });
     return exports;
   }
@@ -248,18 +249,18 @@ test("首条提示词包含截断页面信息，切页通知跨后台恢复与�
         conversationHistory: { content: string }[];
       }
     ).conversationHistory;
-  expect(messages()[2].content).toContain("已切换操作标签页");
+  expect(messages()[2].content).toContain("已切换标签页");
   expect(messages()[2].content).toContain("<title>页面 B</title>");
   await restored.send("agent:truncateBeforeUserTurn", { turnIndex: 2 });
   await restored.send("agent:start", {
     ...startPayload,
     userMessage: "重试切换",
   });
-  expect(messages()[2].content).toContain("已切换操作标签页");
+  expect(messages()[2].content).toContain("已切换标签页");
   await restored.send("agent:reset");
   await restored.send("agent:start", startPayload);
-  expect(messages()[0].content).toContain("当前操作标签页：");
-  expect(messages()[0].content).not.toContain("已切换操作标签页");
+  expect(messages()[0].content).toContain("当前标签页：");
+  expect(messages()[0].content).not.toContain("已切换标签页");
 });
 
 test("页面上下文转义 XML 特殊字符，用户输入原样保留在标签外", async () => {
