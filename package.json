@@ -7,7 +7,8 @@
     "dev": "vite build --watch",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:ui": "pnpm build && playwright test"
+    "test:ui": "pnpm build && playwright test",
+    "test:ui:screenshots": "pnpm build && playwright test --config playwright.screenshots.config.ts"
   },
   "dependencies": {
     "@jitl/quickjs-ffi-types": "^0.32.0",

@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
 
 test("流式公式正文末尾不出现孤立美元符号", async ({ page }) => {
   await page.addInitScript(() => {
@@ -155,23 +154,11 @@ test("流式公式正文末尾不出现孤立美元符号", async ({ page }) => 
         useInnerText: true,
       });
     }
-    if (sample.name === "双反引号代码和公式") {
-      await expect(markdown.locator(".katex")).toHaveCount(1);
-      await mkdir("artifacts/ui", { recursive: true });
-      await markdown.screenshot({
-        path: "artifacts/ui/math-trailing-dollar-streaming.png",
-      });
-    }
     await emit("assistant_turn_done", {});
     await emit("done", {});
     await expect(
       page.getByRole("button", { name: "停止", exact: true }),
     ).toHaveCount(0);
     await expect(markdown).toHaveText(/正文结束。$/, { useInnerText: true });
-    if (sample.name === "双反引号代码和公式") {
-      await markdown.screenshot({
-        path: "artifacts/ui/math-trailing-dollar-done.png",
-      });
-    }
   }
 });

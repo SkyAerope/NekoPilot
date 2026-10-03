@@ -166,6 +166,8 @@ pnpm test:ui     # 生产构建 + 浏览器 UI 回归检查
 
 UI 检查默认使用已安装的 Chrome，模拟扩展消息与存储，并应用与扩展相同的脚本 CSP。覆盖审批、停止、重试、历史恢复、主题同步、附件标签、流式公式和窄侧边栏布局；真实 CDP 操作与模型 API 需在加载扩展后验证。可通过 `PLAYWRIGHT_CHANNEL` 选择其他已安装的浏览器通道。
 
+常规回归以行为断言为准，失败时保留截图和追踪。需要人工检查审批界面与设置页的明暗主题时，单独运行 `pnpm test:ui:screenshots`；截图输出到 `test-results/` 和 `artifacts/ui/`，不进行自动图片比较。
+
 组件源码直接保存在仓库中。`PromptInput` 的 `onFilesAdded` 接口让扩展沿用原始 `File` 状态；网页上的元素选择框和操作标记继续由原有 CDP 代码维护。当前附件沿用既有行为，仅在聊天中展示文件名，未增加文件内容上传协议。
 
 提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 风格（`feat:` / `fix:` / `refactor:` ...）。
