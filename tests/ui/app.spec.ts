@@ -1515,6 +1515,74 @@ test("截图详情只展示结果，等待和失败时也没有标签页", async
   await expect(page.getByRole("tab")).toHaveCount(0);
 });
 
+for (const eventType of [
+  "message",
+  "tool_call_streaming",
+  "tool_call",
+  "assistant_turn_done",
+  "error",
+  "done",
+]) {
+  test(`思考在 ${eventType} 后停止转圈且重复收尾不改变耗时`, async ({
+    page,
+  }) => {
+    await installHarness(page);
+    await page.goto("/sidepanel.html");
+    await emit(page, "thinking", "检查页面");
+    await expect(page.getByRole("button", { name: /Thinking/ })).toBeVisible();
+    await emit(
+      page,
+      eventType,
+      eventType === "tool_call"
+        ? { name: "read_page", args: "{}", id: "thinking-tool" }
+        : "下一阶段",
+    );
+    const completed = page.getByRole("button", { name: /已思考/ });
+    await expect(completed).toHaveCount(1);
+    await expect(completed.locator("svg.animate-spin")).toHaveCount(0);
+    const label = await completed.textContent();
+    await emit(page, "assistant_turn_done", "");
+    await emit(page, "done", "");
+    await expect(completed).toHaveText(label!);
+    await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(0);
+  });
+}
+
+test("主动停止思考不依赖后台发送完成事件", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await page.getByRole("textbox", { name: "任务内容" }).fill("检查页面");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await emit(page, "thinking", "正在检查");
+  await page.getByRole("button", { name: "停止", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /已思考/ })).toHaveCount(1);
+  expect(
+    await page.evaluate(() =>
+      window.__harness.messages.some(
+        (message) => message.type === "agent:stop",
+      ),
+    ),
+  ).toBe(true);
+});
+
+test("新思考关闭上一条且标签思考能跨增量继续", async ({ page }) => {
+  await installHarness(page);
+  await page.goto("/sidepanel.html");
+  await emit(page, "thinking", "第一段");
+  await emit(page, "thinking", "第二段");
+  await expect(page.getByRole("button", { name: /已思考/ })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(1);
+  await emit(page, "message", "");
+  await emit(page, "message_delta", "<think>第三段");
+  await emit(page, "message_delta", "仍在思考");
+  await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(1);
+  await expect(page.getByText("第三段仍在思考", { exact: true })).toBeVisible();
+  await emit(page, "assistant_turn_done", "");
+  await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /已思考/ })).toHaveCount(3);
+});
+
 test("思考转圈和完成勾选保持在同一位置", async ({ page }) => {
   await installHarness(page);
   await page.goto("/sidepanel.html");

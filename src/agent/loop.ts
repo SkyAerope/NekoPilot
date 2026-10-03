@@ -274,10 +274,15 @@ export class AgentLoop {
   }
 
   private async callLlm(): Promise<ChatMessage> {
-    if (this.config.provider === "anthropic") {
-      return this.callLlmAnthropic();
+    try {
+      if (this.config.provider === "anthropic") {
+        return await this.callLlmAnthropic();
+      }
+      return await this.callLlmOpenAI();
+    } finally {
+      // 中止和读取异常也必须结束本轮 UI 的思考状态。
+      this.emit({ type: "assistant_turn_done", data: "" });
     }
-    return this.callLlmOpenAI();
   }
 
   private async callLlmOpenAI(): Promise<ChatMessage> {
@@ -411,8 +416,6 @@ export class AgentLoop {
     }
 
     const toolCalls = Array.from(toolCallsMap.values()) as ToolCall[];
-
-    this.emit({ type: "assistant_turn_done", data: "" });
 
     return {
       role: "assistant",
@@ -672,8 +675,6 @@ export class AgentLoop {
         }
       }
     }
-
-    this.emit({ type: "assistant_turn_done", data: "" });
 
     if (inputTokens || outputTokens) {
       this.emit({

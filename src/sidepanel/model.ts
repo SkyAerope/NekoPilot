@@ -38,6 +38,28 @@ export interface LogEntry {
   thinkSeconds?: number;
 }
 
+export function finishThinking(
+  entries: LogEntry[],
+  now = Date.now(),
+): LogEntry[] {
+  if (
+    !entries.some((entry) => entry.type === "thinking" && !entry.thinkingDone)
+  ) {
+    return entries;
+  }
+  return entries.map((entry) =>
+    entry.type === "thinking" && !entry.thinkingDone
+      ? {
+          ...entry,
+          thinkingDone: true,
+          thinkSeconds:
+            entry.thinkSeconds ??
+            Math.max(1, Math.round((now - entry.timestamp) / 1000)),
+        }
+      : entry,
+  );
+}
+
 /** 将含 <think>...</think> 或 <thinking>...</thinking> 的原始内容拆为思考与正文。
  *  仅当存在闭合标签时才会拆出 body；否则全部视为思考中。 */
 export function splitThinkText(raw: string): { think: string; body: string } {

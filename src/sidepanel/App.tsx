@@ -52,6 +52,7 @@ import {
   groupIntoTurns,
   getToolLabel,
   formatTokens,
+  finishThinking,
 } from "./model";
 import { sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
@@ -195,6 +196,20 @@ export default function App() {
       }
       if (message.type !== "agent:event" || !message.payload) return;
       const event = message.payload as AgentEvent;
+
+      // 阶段切换和终止都要收尾，不能依赖模型发送闭合标签或流正常结束。
+      if (
+        [
+          "message",
+          "tool_call_streaming",
+          "tool_call",
+          "thinking",
+          "done",
+          "error",
+        ].includes(event.type)
+      ) {
+        setLogs((prev) => finishThinking(prev));
+      }
 
       if (event.type === "done") {
         setRunning(false);
@@ -485,23 +500,7 @@ export default function App() {
       }
 
       if (event.type === "assistant_turn_done") {
-        // 单轮 LLM 流结束：把仍未闭合的最后一条 thinking 强制收尾，避免无限转圈。
-        // 出现条件：模型只发了 <think> 没发 </think>，或通过 reasoning 通道发了思考但没有显式结束信号。
-        setLogs((prev) => {
-          const lastThink = prev.findLastIndex((l) => l.type === "thinking");
-          if (lastThink === -1) return prev;
-          const old = prev[lastThink];
-          if (old.thinkingDone) return prev;
-          const updated = [...prev];
-          updated[lastThink] = {
-            ...old,
-            thinkingDone: true,
-            thinkSeconds:
-              old.thinkSeconds ??
-              Math.max(1, Math.round((Date.now() - old.timestamp) / 1000)),
-          };
-          return updated;
-        });
+        setLogs((prev) => finishThinking(prev));
         return;
       }
 
@@ -820,6 +819,7 @@ export default function App() {
   ]);
 
   const handleStop = useCallback(async () => {
+    setLogs((prev) => finishThinking(prev));
     await sendMessage("agent:stop");
     setRunning(false);
   }, []);
