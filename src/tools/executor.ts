@@ -25,6 +25,13 @@ export class ToolExecutor {
   private screenshotScaleMode: ScreenshotScaleMode = "claude46";
   private screenshotMaxLongEdge = 1568;
   private screenshotMaxPixels = 1_150_000;
+  private nativeScreenshotScale: {
+    tabId: number | null;
+    width: number;
+    height: number;
+    devicePixelRatio: number;
+    scale: number;
+  } | null = null;
 
   configureShortRefs(enabled: boolean): void {
     this.shortRefsEnabled = enabled;
@@ -35,6 +42,7 @@ export class ToolExecutor {
     maxPixels?: number,
   ): void {
     this.screenshotScaleMode = mode;
+    this.nativeScreenshotScale = null;
     if (mode === "custom") {
       this.screenshotMaxLongEdge = Math.max(0, Math.round(maxLongEdge ?? 0));
       this.screenshotMaxPixels = Math.max(0, Math.round(maxPixels ?? 0));
@@ -56,6 +64,7 @@ export class ToolExecutor {
   resetShortRefs(): void {
     this.shortRefMap.clear();
     this.shortRefCounter = 0;
+    this.nativeScreenshotScale = null;
   }
   private allocShortRef(selector: string): string {
     const id = `#${++this.shortRefCounter}`;
@@ -134,17 +143,25 @@ export class ToolExecutor {
     }
   }
 
-  /** CSS 视口尺寸（CSS px，与页面脚本 getBoundingClientRect 同一坐标系） */
-  private async getViewportSize(): Promise<{ width: number; height: number }> {
-    const metrics = await this.cdp.send<{
-      cssVisualViewport?: { clientWidth: number; clientHeight: number };
-      cssLayoutViewport?: { clientWidth: number; clientHeight: number };
-    }>("Page.getLayoutMetrics", {});
-    const vp = metrics.cssVisualViewport ?? metrics.cssLayoutViewport;
-    if (!vp || !vp.clientWidth || !vp.clientHeight) {
-      throw new Error("Failed to get viewport size from Page.getLayoutMetrics");
+  /** 无裁剪截图包含滚动条，使用完整 CSS 视口避免缩放后内容与点击坐标错位。 */
+  private async getViewportSize(): Promise<{
+    width: number;
+    height: number;
+    devicePixelRatio: number;
+  }> {
+    const viewport = await this.evaluate<{
+      width: number;
+      height: number;
+      devicePixelRatio: number;
+    }>("({ width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio })");
+    if (
+      !Number.isFinite(viewport.width) || viewport.width <= 0 ||
+      !Number.isFinite(viewport.height) || viewport.height <= 0 ||
+      !Number.isFinite(viewport.devicePixelRatio) || viewport.devicePixelRatio <= 0
+    ) {
+      throw new Error("Failed to get viewport size from page");
     }
-    return { width: vp.clientWidth, height: vp.clientHeight };
+    return viewport;
   }
 
   /** 计算缩放系数 k（≤1）：显示坐标 = 视口坐标 × k；0 表示该项无限制 */
@@ -158,13 +175,23 @@ export class ToolExecutor {
     if (limits.maxLongEdge > 0) {
       k = Math.min(k, limits.maxLongEdge / Math.max(width, height));
     }
+    // 画布每轴至少一像素；极小像素预算下仍需限制另一轴，避免取整后超出预算。
+    if (limits.maxPixels > 0 && Math.min(width, height) * k < 1) {
+      k = Math.min(k, limits.maxPixels / Math.max(width, height));
+    }
     return Math.min(1, k);
   }
 
   /** 按当前视口即时计算缩放系数 */
   private async getScaleFactor(): Promise<number> {
-    if (this.screenshotScaleMode === "off") return 1;
-    const { width, height } = await this.getViewportSize();
+    const { width, height, devicePixelRatio } = await this.getViewportSize();
+    if (this.screenshotScaleMode === "off") {
+      const native = this.nativeScreenshotScale;
+      if (native && native.tabId === this.cdp.currentTabId &&
+        native.width === width && native.height === height &&
+        native.devicePixelRatio === devicePixelRatio) return native.scale;
+      return devicePixelRatio;
+    }
     return this.computeScale(width, height);
   }
 
@@ -471,19 +498,44 @@ export class ToolExecutor {
   // ── 具体 Tool 实现 ──
 
   private async screenshot(): Promise<{ data: string; mime: string }> {
+    // Edge 的后台标签页可能在 CDP clip/scale 路径返回空白，始终先获取完整视口原图。
+    const result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
+    const { width, height, devicePixelRatio } = await this.getViewportSize();
     if (this.screenshotScaleMode === "off") {
-      const result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
+      // CDP 原图比例在设备模拟时未必等于 DPR，以 PNG 的实际宽度为准。
+      const header = Uint8Array.from(atob(result.data.slice(0, 32)), (character) => character.charCodeAt(0));
+      const pixelWidth = new DataView(header.buffer).getUint32(16);
+      this.nativeScreenshotScale = {
+        tabId: this.cdp.currentTabId, width, height, devicePixelRatio,
+        scale: pixelWidth / width,
+      };
       return { data: result.data, mime: "image/png" };
     }
-    // clip 以 CSS px 为单位：同时完成高 DPI 归一化（DPR>1 时输出不再是设备像素）
-    // 与降采样到 API 图像限制内（scale=k）。
-    const { width, height } = await this.getViewportSize();
     const k = this.computeScale(width, height);
-    const result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", {
-      format: "png",
-      clip: { x: 0, y: 0, width, height, scale: k },
-    });
-    return { data: result.data, mime: "image/png" };
+    const outputWidth = Math.max(1, Math.floor(width * k));
+    const outputHeight = Math.max(1, Math.floor(height * k));
+    const bytes = Uint8Array.from(atob(result.data), (character) => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    try {
+      if (bitmap.width === outputWidth && bitmap.height === outputHeight) {
+        return { data: result.data, mime: "image/png" };
+      }
+      const canvas = new OffscreenCanvas(outputWidth, outputHeight);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Failed to create screenshot canvas context");
+      context.imageSmoothingQuality = "high";
+      // 两轴使用相同的 k；画布只裁掉不足一像素的尾部，保持现有坐标换算准确。
+      context.drawImage(bitmap, 0, 0, width * k, height * k);
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      const outputBytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let offset = 0; offset < outputBytes.length; offset += 32768) {
+        binary += String.fromCharCode(...outputBytes.subarray(offset, offset + 32768));
+      }
+      return { data: btoa(binary), mime: "image/png" };
+    } finally {
+      bitmap.close();
+    }
   }
 
   private async executeJs(description: string, code: string): Promise<{
