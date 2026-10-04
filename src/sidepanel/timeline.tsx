@@ -340,7 +340,7 @@ function ToolCallStep({
         />
       </CollapsibleTrigger>
       {(expanded || awaitingApproval) && (
-        <div className="min-w-0 overflow-hidden rounded-md border">
+        <div className={cn("min-w-0 overflow-hidden rounded-md", entry.toolName !== "screenshot" && "border")}>
           <ToolContent className="min-w-0">
             <Suspense
               fallback={

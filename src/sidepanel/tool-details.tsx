@@ -107,7 +107,7 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
     />
   );
   const resultContent = entry.screenshotData ? (
-    <div className="px-3 py-2">
+    <div>
       <img
         src={`data:${entry.screenshotMime || "image/png"};base64,${entry.screenshotData}`}
         alt="浏览器截图"
@@ -127,7 +127,7 @@ export default function ToolDetails({ entry }: { entry: LogEntry }) {
   );
   if (entry.toolName === "screenshot") {
     return (
-      <div className="min-w-0 py-2">
+      <div className="min-w-0">
         {hasResult && !entry.screenshotData && (
           <div className="flex justify-end px-3">{copyButton("result")}</div>
         )}
