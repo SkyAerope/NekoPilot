@@ -12,20 +12,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import type { BundledLanguage, ShikiTransformer } from "shiki";
-import { createHighlighterCore } from "shiki/core";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import json from "shiki/langs/json.mjs";
-import javascript from "shiki/langs/javascript.mjs";
-import oneLight from "shiki/themes/one-light.mjs";
-import oneDark from "shiki/themes/one-dark-pro.mjs";
-
-// 工具详情只需 JSON 和 JavaScript，避免把全部语言与主题打包进扩展。
-const highlighterPromise = createHighlighterCore({
-  langs: [json, javascript],
-  themes: [oneLight, oneDark],
-  engine: createJavaScriptRegexEngine(),
-});
+import type { BundledLanguage } from "shiki";
 
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
@@ -41,54 +28,22 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 });
 
-const lineNumberTransformer: ShikiTransformer = {
-  name: "line-numbers",
-  line(node, line) {
-    node.children.unshift({
-      type: "element",
-      tagName: "span",
-      properties: {
-        className: [
-          "inline-block",
-          "min-w-10",
-          "mr-4",
-          "text-right",
-          "select-none",
-          "text-muted-foreground",
-        ],
-      },
-      children: [{ type: "text", value: String(line) }],
-    });
-  },
-};
-
 export async function highlightCode(
   code: string,
   language: BundledLanguage | "text",
   showLineNumbers = false,
 ) {
-  const transformers: ShikiTransformer[] = showLineNumbers
-    ? [lineNumberTransformer]
-    : [];
-
-  const highlighter = await highlighterPromise;
-  const lang =
-    language !== "text" && highlighter.getLoadedLanguages().includes(language)
-      ? language
-      : "text";
-  return [
-    highlighter.codeToHtml(code, {
-      lang,
-      theme: "one-light",
-      transformers,
-    }),
-    highlighter.codeToHtml(code, {
-      lang,
-      theme: "one-dark-pro",
-      transformers,
-    }),
-  ];
+  const highlighter = await import("./code-highlighter");
+  return highlighter.highlightCode(code, language, showLineNumbers);
 }
+
+type HighlightedCode = {
+  readonly code: string;
+  readonly language: BundledLanguage | "text";
+  readonly showLineNumbers: boolean;
+  readonly light: string;
+  readonly dark: string;
+};
 
 export const CodeBlock = ({
   code,
@@ -98,24 +53,31 @@ export const CodeBlock = ({
   children,
   ...props
 }: CodeBlockProps) => {
-  const [html, setHtml] = useState<string>("");
-  const [darkHtml, setDarkHtml] = useState<string>("");
+  const [highlighted, setHighlighted] = useState<HighlightedCode>();
+  const current =
+    highlighted?.code === code &&
+    highlighted.language === language &&
+    highlighted.showLineNumbers === showLineNumbers
+      ? highlighted
+      : undefined;
+  const html = current?.light ?? "";
+  const darkHtml = current?.dark ?? "";
   // 保持属性对象稳定，避免无关渲染重写文本节点并破坏原生选区。
   const lightMarkup = useMemo(() => ({ __html: html }), [html]);
   const darkMarkup = useMemo(() => ({ __html: darkHtml }), [darkHtml]);
   useEffect(() => {
+    if (language === "text" && !showLineNumbers) return;
     let cancelled = false;
     highlightCode(code, language, showLineNumbers)
       .then(([light, dark]) => {
         if (!cancelled) {
-          setHtml(light);
-          setDarkHtml(dark);
+          setHighlighted({ code, language, showLineNumbers, light, dark });
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        if (!(error instanceof Error)) throw error;
         if (!cancelled) {
-          setHtml("");
-          setDarkHtml("");
+          setHighlighted(undefined);
         }
       });
 
@@ -135,8 +97,8 @@ export const CodeBlock = ({
       >
         <div className="relative">
           {!html && (
-            <pre className="overflow-auto p-4 text-sm">
-              <code>{code}</code>
+            <pre className="m-0 overflow-auto p-4 font-mono text-sm">
+              <code className="font-mono">{code}</code>
             </pre>
           )}
           <div

@@ -1,4 +1,4 @@
-import { useState, useMemo, lazy, Suspense } from "react";
+import { useState, useMemo } from "react";
 import {
   Brain,
   Camera,
@@ -32,6 +32,9 @@ import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "./markdown";
 import { IconAction } from "./controls";
 import { useBottomScroll } from "./use-bottom-scroll";
+import { ScreenshotPreview } from "./screenshot-preview";
+import { useScreenshotImage } from "./use-screenshot-image";
+import ToolDetails from "./tool-details";
 import {
   type LogEntry,
   getToolLabel,
@@ -39,7 +42,6 @@ import {
   splitThinkText,
 } from "./model";
 
-const ToolDetails = lazy(() => import("./tool-details"));
 const stepTriggerClassName =
   "flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-left text-xs transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 const approvalBadgeClassName =
@@ -111,12 +113,14 @@ export function StepsGroup({
         )}
         <ChevronDown
           className={cn(
-            "size-3.5 transition-transform",
+            "size-3.5 transition-transform duration-200 motion-reduce:transition-none",
             expanded && "rotate-180",
           )}
         />
       </CollapsibleTrigger>
-      <CollapsibleContent>{content}</CollapsibleContent>
+      <CollapsibleContent className="collapsible-motion">
+        {content}
+      </CollapsibleContent>
     </Collapsible>
   );
 }
@@ -259,12 +263,12 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
         )}
         <ChevronDown
           className={cn(
-            "size-3 shrink-0 transition-transform",
+            "size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none",
             open && "rotate-180",
           )}
         />
       </ReasoningTrigger>
-      <CollapsibleContent>
+      <CollapsibleContent className="collapsible-motion">
         <div
           ref={thinkingScroll.scrollRef}
           onScroll={thinkingScroll.onScroll}
@@ -298,6 +302,11 @@ function ToolCallStep({
   onReject: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [prewarmScreenshot, setPrewarmScreenshot] = useState(false);
+  const screenshotImage = useScreenshotImage(
+    entry,
+    expanded || prewarmScreenshot,
+  );
   const state = getToolState(entry);
   const awaitingApproval = state === "approval-requested";
   const executing = state === "input-available";
@@ -312,7 +321,15 @@ function ToolCallStep({
       onOpenChange={setExpanded}
       className="mb-0 min-w-0 border-0"
     >
-      <CollapsibleTrigger className={stepTriggerClassName}>
+      <CollapsibleTrigger
+        className={stepTriggerClassName}
+        onPointerEnter={() => {
+          if (entry.toolName === "screenshot") setPrewarmScreenshot(true);
+        }}
+        onFocus={() => {
+          if (entry.toolName === "screenshot") setPrewarmScreenshot(true);
+        }}
+      >
         <span className="shrink-0 font-medium text-muted-foreground">
           {getToolLabel(entry.toolName)}
         </span>
@@ -339,48 +356,53 @@ function ToolCallStep({
           )}
         />
       </CollapsibleTrigger>
-      {(expanded || awaitingApproval) && (
-        <div className={cn("min-w-0 overflow-hidden rounded-md", entry.toolName !== "screenshot" && "border")}>
-          <ToolContent className="min-w-0">
-            <Suspense
-              fallback={
-                <div className="border-t p-3 text-xs text-muted-foreground">
-                  正在加载详情…
-                </div>
-              }
-            >
+      <div
+        className={cn(
+          "min-w-0 overflow-hidden rounded-md",
+          awaitingApproval && entry.toolName !== "screenshot" && "border",
+        )}
+      >
+        <ToolContent className="min-w-0">
+          <div
+            className={cn(
+              "min-w-0 overflow-hidden rounded-md",
+              !awaitingApproval && entry.toolName !== "screenshot" && "border",
+            )}
+          >
+            {entry.toolName === "screenshot" &&
+            (entry.screenshotData || entry.toolResult === undefined) ? (
+              <ScreenshotPreview entry={entry} image={screenshotImage} />
+            ) : (
               <ToolDetails entry={entry} />
-            </Suspense>
-          </ToolContent>
-          {awaitingApproval && entry.toolCallId && (
-            <Confirmation
-              state={state}
-              approval={{ id: entry.toolCallId }}
-              className={cn(
-                "flex-row items-center justify-between gap-2 rounded-none border-0 bg-muted/30 px-3 py-3",
-                expanded && "border-t",
-              )}
-            >
-              <ConfirmationTitle className="text-xs">
-                需要你的确认
-              </ConfirmationTitle>
-              <ConfirmationActions>
-                <ConfirmationAction
-                  variant="outline"
-                  onClick={() => onReject(entry.toolCallId!)}
-                >
-                  拒绝
-                </ConfirmationAction>
-                <ConfirmationAction
-                  onClick={() => onApprove(entry.toolCallId!)}
-                >
-                  允许
-                </ConfirmationAction>
-              </ConfirmationActions>
-            </Confirmation>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        </ToolContent>
+        {awaitingApproval && entry.toolCallId && (
+          <Confirmation
+            state={state}
+            approval={{ id: entry.toolCallId }}
+            className={cn(
+              "flex-row items-center justify-between gap-2 rounded-none border-0 bg-muted/30 px-3 py-3",
+              expanded && "border-t",
+            )}
+          >
+            <ConfirmationTitle className="text-xs">
+              需要你的确认
+            </ConfirmationTitle>
+            <ConfirmationActions>
+              <ConfirmationAction
+                variant="outline"
+                onClick={() => onReject(entry.toolCallId!)}
+              >
+                拒绝
+              </ConfirmationAction>
+              <ConfirmationAction onClick={() => onApprove(entry.toolCallId!)}>
+                允许
+              </ConfirmationAction>
+            </ConfirmationActions>
+          </Confirmation>
+        )}
+      </div>
     </Tool>
   );
 }
