@@ -2,5 +2,13 @@ allowBuilds:
   esbuild: true
   sharp: true
 
+minimumReleaseAgeExclude:
+  - vite@6.4.3
+  - '@babel/core@7.29.1'
+  - sharp@0.35.0 || 0.35.4
+  - postcss@8.5.12 || 8.5.18 || 8.5.23
+  - browserslist@4.28.7
+  - baseline-browser-mapping@2.11.0
+
 # 依赖状态异常时立即报错，避免构建或格式化隐式触发安装。
 verifyDepsBeforeRun: error
