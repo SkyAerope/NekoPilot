@@ -1170,6 +1170,49 @@ test("Markdown 表格、公式、代码与无效公式兼容", async ({ page }) 
   await expectNoOverflow(page);
 });
 
+test("表格全屏时表格本体保持圆角，退出后恢复行内卡片", async ({ page }) => {
+  await installHarness(page, {
+    chatLogs: [
+      {
+        id: 1,
+        type: "assistant",
+        content:
+          "| 字段 | 值 |\n| --- | --- |\n| 状态 | 正常 |\n| 版本 | 0.1.1 |",
+        timestamp: 1,
+      },
+    ],
+  });
+  await page.goto("/sidepanel.html");
+  await expect(page.getByRole("table")).toBeVisible();
+  await page.getByTitle("View fullscreen").click();
+  const overlay = page.locator('[data-streamdown="table-fullscreen"]');
+  await expect(overlay).toBeVisible();
+  const table = overlay.locator('[data-streamdown="table"]');
+  await expect(table).toBeVisible();
+  const radius = await table.evaluate((el) =>
+    getComputedStyle(el).borderRadius,
+  );
+  expect(radius).not.toBe("0px");
+  const collapse = await table.evaluate((el) =>
+    getComputedStyle(el).borderCollapse,
+  );
+  expect(collapse).toBe("separate");
+  const headerClip = await table
+    .locator('[data-streamdown="table-header"]')
+    .evaluate((el) => getComputedStyle(el).clipPath);
+  expect(headerClip).not.toBe("none");
+  const firstRowCell = table.locator(
+    '[data-streamdown="table-row"]:not(:last-child) [data-streamdown="table-cell"]',
+  ).first();
+  const cellBorder = await firstRowCell.evaluate((el) =>
+    getComputedStyle(el).borderBottomWidth,
+  );
+  expect(cellBorder).toBe("1px");
+  await page.getByTitle("Exit fullscreen").click();
+  await expect(overlay).toBeHidden();
+  await expect(page.getByRole("table")).toBeVisible();
+});
+
 test("流式思考、步骤分组和手动折叠", async ({ page }) => {
   await installHarness(page);
   await page.goto("/sidepanel.html");

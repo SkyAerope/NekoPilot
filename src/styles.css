@@ -113,3 +113,14 @@
 .markdown img {
   max-width: 100%;
 }
+[data-streamdown="table-fullscreen"] [data-streamdown="table"] {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: var(--radius);
+}
+[data-streamdown="table-fullscreen"] [data-streamdown="table"] [data-streamdown="table-header"] {
+  clip-path: inset(0 round var(--radius) 0 0);
+}
+[data-streamdown="table-fullscreen"] [data-streamdown="table"] [data-streamdown="table-row"]:not(:last-child) [data-streamdown="table-cell"] {
+  border-bottom: 1px solid var(--border);
+}
