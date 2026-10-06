@@ -55,13 +55,16 @@ import {
   formatTokens,
   finishThinking,
 } from "./model";
-import { sendMessage } from "../shared/messaging";
+import { sendAgentStart, sendMessage } from "../shared/messaging";
 import type { AgentEvent } from "../agent/types";
 import type { TargetTabBinding, TargetTabStatus } from "../shared/target-tab";
 import { TabSelector } from "./tab-selector";
 import { TabIcon } from "./tab-icon";
 import { isScreenshotRef } from "../shared/assets";
-import { migrateScreenshotLogs, screenshotIds } from "./screenshot-storage";
+import { migrateScreenshotLogs } from "./screenshot-storage";
+import { logAssetIds } from "./attachment-storage";
+import { attachmentAccept, validateAttachmentFiles } from "../shared/attachments";
+import { prepareAttachments } from "../shared/attachment-files";
 import { AssetPins, collectOrphanAssets, screenshotEventRef, withAssetPublication, withConversationWrite } from "../shared/asset-lifecycle";
 
 let logIdCounter = 0;
@@ -106,6 +109,9 @@ export default function App() {
   } | null>(null);
   const [pickedElements, setPickedElements] = useState<PickedElement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [preparingAttachments, setPreparingAttachments] = useState(false);
+  const submittingRef = useRef(false);
+  const pendingSendRef = useRef<{ id: number; accepted: boolean; onAccepted: () => void } | null>(null);
   const [elementTextLimit, setElementTextLimit] = useState(128);
   /** 最近一次 LLM 响应的 prompt token 数——代表"当前上下文占用"。
    *  每轮请求都会刷新，UI 把它显示在工具栏让用户知道还剩多少预算。 */
@@ -142,13 +148,13 @@ export default function App() {
           try {
               const migrated = await migrateScreenshotLogs(restored);
               if (!active || generation !== logsGenerationRef.current) return;
-              await assetPins.retain(screenshotIds(migrated));
+              await assetPins.retain(logAssetIds(migrated));
               if (!active || generation !== logsGenerationRef.current) return;
               logsLoadedRef.current = true;
               setLogs((previous) => [...migrated, ...previous]);
           } catch (error: unknown) {
               if (!active || generation !== logsGenerationRef.current) return;
-              await assetPins.retain(screenshotIds(restored));
+              await assetPins.retain(logAssetIds(restored));
               if (!active || generation !== logsGenerationRef.current) return;
               logsLoadedRef.current = true;
               setLogs((previous) => [...restored, ...previous, {
@@ -178,7 +184,7 @@ export default function App() {
       void withAssetPublication(async () => {
         const migrated = await migrateScreenshotLogs(logs);
         if (!active || generation !== logsGenerationRef.current) return;
-        await assetPins.retain(screenshotIds(migrated));
+        await assetPins.retain(logAssetIds(migrated));
         await withConversationWrite(async () => {
           if (!active || generation !== logsGenerationRef.current) return;
           await chrome.storage.local.set({
@@ -220,6 +226,11 @@ export default function App() {
     }) => {
       if (message.type === "target:bound" && message.payload) {
         const binding = message.payload as TargetTabBinding;
+        const pending = pendingSendRef.current;
+        if (pending?.id === binding.messageId) {
+          pending.accepted = true;
+          pending.onAccepted();
+        }
         setLogs((previous) =>
           previous.map((entry) =>
             entry.id === binding.messageId
@@ -733,7 +744,8 @@ export default function App() {
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (
-      (!text && pickedElements.length === 0) ||
+      (!text && pickedElements.length === 0 && attachments.length === 0) ||
+      submittingRef.current ||
       editingMessage !== null ||
       running ||
       switchingTab ||
@@ -752,28 +764,11 @@ export default function App() {
     const attachmentNames = attachments.map((a) => a.name);
     const fullMessage = [text, elementContext].filter(Boolean).join("\n");
     const messageId = ++logIdCounter;
-
-    setInput("");
-    setPickedElements([]);
-    setAttachments([]);
-    setLogs((prev) => [
-      ...prev,
-      {
-        id: messageId,
-        type: "user",
-        content:
-          text +
-          (attachmentNames.length
-            ? `\n[附件: ${attachmentNames.join(", ")}]`
-            : ""),
-        timestamp: Date.now(),
-        attachmentNames: attachmentNames.length ? attachmentNames : undefined,
-        targetTab: targetStatus?.target ?? undefined,
-        pickedElements:
-          pickedElements.length > 0 ? [...pickedElements] : undefined,
-      },
-    ]);
-
+    submittingRef.current = true;
+    setPreparingAttachments(true);
+    setTargetError(null);
+    let releasePreparation = async () => {};
+    try {
     const settings = await sendMessage<{
       apiKey?: string;
       baseUrl?: string;
@@ -806,11 +801,27 @@ export default function App() {
       return;
     }
 
-    setRunning(true);
-    try {
-      await sendMessage("agent:start", {
+      const prepared = await prepareAttachments(attachments.map(attachment => attachment.file));
+      releasePreparation = prepared.release;
+      const uploaded = prepared.attachments;
+      await assetPins.retain(uploaded.map(attachment => attachment.asset.id));
+      pendingSendRef.current = { id: messageId, accepted: false, onAccepted: () => {
+        setInput("");
+        setPickedElements([]);
+        setAttachments([]);
+      } };
+      setLogs(prev => [...prev, {
+        id: messageId, type: "user", content: text + (attachmentNames.length ? `\n[附件: ${attachmentNames.join(", ")}]` : ""),
+        timestamp: Date.now(), attachments: uploaded, attachmentNames,
+        targetTab: targetStatus?.target ?? undefined,
+        pickedElements: pickedElements.length ? [...pickedElements] : undefined,
+      }]);
+      setPreparingAttachments(false);
+      setRunning(true);
+      await sendAgentStart({
         messageId,
         userMessage: fullMessage,
+        attachments: uploaded,
         config: {
           apiKey: settings.apiKey,
           baseUrl: settings.baseUrl || "https://api.openai.com/v1",
@@ -857,6 +868,7 @@ export default function App() {
         },
       });
     } catch (err) {
+      if (!pendingSendRef.current?.accepted) setLogs(prev => prev.filter(entry => entry.id !== messageId));
       setLogs((prev) => [
         ...prev,
         {
@@ -867,6 +879,11 @@ export default function App() {
         },
       ]);
       setRunning(false);
+    } finally {
+      submittingRef.current = false;
+      pendingSendRef.current = null;
+      setPreparingAttachments(false);
+      await releasePreparation();
     }
   }, [
     input,
@@ -889,6 +906,7 @@ export default function App() {
   }, []);
 
   const handleClearChat = useCallback(async () => {
+    if (submittingRef.current) return;
     setSwitchingTab(true);
     try {
       await sendMessage("agent:reset");
@@ -900,6 +918,7 @@ export default function App() {
       setPromptTokens(null);
       setCacheInfo(null);
       setPickedElements([]);
+      setAttachments([]);
       setTargetError(null);
       await assetPins.clear();
       const collection = await collectOrphanAssets();
@@ -935,7 +954,7 @@ export default function App() {
   }, []);
 
   const handlePickElement = useCallback(async () => {
-    if (picking) return;
+    if (picking || submittingRef.current) return;
     setPicking(true);
     try {
       const result = await sendMessage<{
@@ -1009,6 +1028,7 @@ export default function App() {
     async (entryId: number, isUser: boolean, editedText?: string) => {
       if (
         running ||
+        submittingRef.current ||
         switchingTab ||
         targetStatus?.busy ||
         targetStatusError?.needsReload ||
@@ -1041,9 +1061,11 @@ export default function App() {
       if (
         editedText !== undefined &&
         !text &&
-        !userEntry.pickedElements?.length
+        !userEntry.pickedElements?.length &&
+        !userEntry.attachments?.length
       )
         return;
+      submittingRef.current = true;
       setRunning(true);
       try {
         // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
@@ -1091,7 +1113,7 @@ export default function App() {
           return;
         }
         // 确认提交后才回滚历史，编辑草稿和取消操作不影响对话。
-        await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
+        if (!userEntry.attachments?.length) await sendMessage("agent:truncateBeforeUserTurn", { turnIndex });
         // 重新追加用户消息到 logs（保持原始内容/附件信息便于再次重试）
         const replayedEntry: LogEntry = {
           ...userEntry,
@@ -1103,11 +1125,13 @@ export default function App() {
           timestamp: Date.now(),
           targetTab: targetStatus?.target ?? undefined,
         };
+        pendingSendRef.current = { id: replayedEntry.id, accepted: false, onAccepted: () => setEditingMessage(null) };
         setLogs([...logs.slice(0, userIdx), replayedEntry]);
-        setEditingMessage(null);
-        await sendMessage("agent:start", {
+        await sendAgentStart({
           messageId: replayedEntry.id,
           userMessage: fullMessage,
+          attachments: userEntry.attachments,
+          retryTurnIndex: userEntry.attachments?.length ? turnIndex : undefined,
           config: {
             apiKey: settings.apiKey,
             baseUrl: settings.baseUrl || "https://api.openai.com/v1",
@@ -1155,6 +1179,7 @@ export default function App() {
           },
         });
       } catch (err) {
+        if (pendingSendRef.current && !pendingSendRef.current.accepted) setLogs(logs);
         setLogs((prev) => [
           ...prev,
           {
@@ -1165,6 +1190,9 @@ export default function App() {
           },
         ]);
         setRunning(false);
+      } finally {
+        submittingRef.current = false;
+        pendingSendRef.current = null;
       }
     },
     [
@@ -1181,6 +1209,14 @@ export default function App() {
   );
 
   const handleAddFiles = useCallback((files: File[]) => {
+    if (running || submittingRef.current) return;
+    try {
+      validateAttachmentFiles([...attachments.map(attachment => attachment.file), ...files]);
+      setTargetError(null);
+    } catch (error: unknown) {
+      setTargetError(getErrorMessage(error));
+      return;
+    }
     const newAttachments: Attachment[] = files.map((file) => ({
       id: ++logIdCounter,
       name: file.name,
@@ -1189,7 +1225,7 @@ export default function App() {
       file,
     }));
     setAttachments((previous) => [...previous, ...newAttachments]);
-  }, []);
+  }, [attachments, running]);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1344,8 +1380,9 @@ export default function App() {
                           picking ||
                           targetStatus?.busy ||
                           targetStatusError?.needsReload ||
-                          (!editingMessage.text.trim() &&
-                            !entry.pickedElements?.length)
+                           (!editingMessage.text.trim() &&
+                             !entry.pickedElements?.length &&
+                             !entry.attachments?.length)
                         }
                         onClick={() =>
                           void handleRetry(entry.id, true, editingMessage.text)
@@ -1519,7 +1556,7 @@ export default function App() {
           onSubmit={() => handleSend()}
           onFilesAdded={handleAddFiles}
           className="rounded-xl bg-card"
-          accept="image/*,.pdf,.txt,.json,.csv"
+        accept={attachmentAccept}
           multiple
         >
           {(picking || pickedElements.length > 0 || attachments.length > 0) && (
@@ -1564,7 +1601,7 @@ export default function App() {
             <PromptInputTextarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              disabled={running}
+              disabled={running || preparingAttachments}
               placeholder="给 NekoPilot 下达任务…"
               aria-label="任务内容"
               className="max-h-32 min-h-20"
@@ -1576,7 +1613,7 @@ export default function App() {
                 label="新建对话"
                 onClick={handleClearChat}
                 disabled={
-                  running || targetStatus?.busy || switchingTab || picking
+                  running || preparingAttachments || targetStatus?.busy || switchingTab || picking
                 }
               >
                 <MessageSquarePlus />
@@ -1662,6 +1699,7 @@ export default function App() {
                         !targetStatus?.target ||
                         targetMismatch ||
                         picking ||
+                        preparingAttachments ||
                         running ||
                         targetStatus?.busy ||
                         switchingTab
@@ -1683,6 +1721,7 @@ export default function App() {
                 <TooltipTrigger asChild>
                   <PromptInputButton
                     aria-label="添加附件"
+                    disabled={running || preparingAttachments}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Paperclip />
@@ -1696,12 +1735,12 @@ export default function App() {
                 aria-label={running ? "停止" : "发送消息"}
                 disabled={
                   !running &&
-                  (picking ||
+                  (preparingAttachments || picking ||
                     editingMessage !== null ||
                     switchingTab ||
                     targetStatusError?.needsReload ||
                     targetStatus?.busy ||
-                    (!input.trim() && pickedElements.length === 0))
+                    (!input.trim() && pickedElements.length === 0 && attachments.length === 0))
                 }
                 onClick={running ? handleStop : undefined}
               />
@@ -1711,7 +1750,7 @@ export default function App() {
         <div className="flex min-w-0 items-center justify-between gap-2">
           <TabSelector
             status={targetStatus}
-            running={running}
+            running={running || preparingAttachments}
             picking={picking}
             switching={switchingTab}
             onRefresh={refreshTargetStatus}
@@ -1724,6 +1763,7 @@ export default function App() {
             <Settings />
           </IconAction>
         </div>
+        {preparingAttachments && <p role="status" className="text-xs text-muted-foreground">正在准备附件…</p>}
         {targetError && (
           <p role="alert" className="break-words text-xs text-destructive">
             {targetError}
@@ -1765,7 +1805,7 @@ export default function App() {
           ref={fileInputRef}
           type="file"
           hidden
-          accept="image/*,.pdf,.txt,.json,.csv"
+        accept={attachmentAccept}
           multiple
           onChange={handleFileChange}
         />

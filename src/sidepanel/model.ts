@@ -1,5 +1,6 @@
 import type { TargetTab } from "../shared/target-tab";
 import type { ScreenshotRef } from "../shared/assets";
+import type { ChatAttachment } from "../shared/attachments";
 
 export interface PickedElement {
   id: number;
@@ -34,6 +35,7 @@ export interface LogEntry {
   prunedFromContext?: boolean;
   pickedElements?: PickedElement[];
   attachmentNames?: string[];
+  attachments?: ChatAttachment[];
   targetTab?: TargetTab;
   showTargetTabChip?: boolean;
   // thinking 相关

@@ -1,4 +1,5 @@
 import { AssetStorageError, isScreenshotRef } from "./assets";
+import { parseAttachments } from "./attachments";
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -25,6 +26,7 @@ export async function readAssetRoots(): Promise<Set<string>> {
     for (const entry of logs) {
       if (!record(entry)) throw new AssetStorageError("聊天记录损坏，取消回收");
       addScreenshot(ids, entry.screenshot);
+      for (const attachment of parseAttachments(entry.attachments)) ids.add(attachment.asset.id);
     }
   }
   const state: unknown = session.conversationState;
@@ -45,6 +47,10 @@ export async function readAssetRoots(): Promise<Set<string>> {
           if (part.screenshot === undefined)
             throw new AssetStorageError("模型截图引用缺失，取消回收");
           addScreenshot(ids, part.screenshot);
+        }
+        if (part.type === "attachment") {
+          if (part.attachment === undefined) throw new AssetStorageError("模型附件引用缺失，取消回收");
+          for (const attachment of parseAttachments([part.attachment])) ids.add(attachment.asset.id);
         }
       }
     }

@@ -5,6 +5,7 @@ import { toolDefinitions } from "../tools/definitions";
 import { toOpenAiFunction, toAnthropicTool } from "../tools/types";
 import { isScreenshotRef, parseLegacyScreenshot, storeScreenshot } from "../shared/assets";
 import { materializeScreenshots } from "./screenshot-history";
+import { materializeAttachments } from "./attachment-history";
 import type {
   AgentConfig,
   AgentEvent,
@@ -292,7 +293,7 @@ export class AgentLoop {
 
     const body = {
       model: this.config.model,
-      messages: await materializeScreenshots(this.messages),
+      messages: await materializeAttachments(await materializeScreenshots(this.messages)),
       tools: functions,
       stream: true,
       // 要求每轮 SSE 最后一条 chunk 带 usage（prompt/completion/total tokens）。
@@ -536,7 +537,7 @@ export class AgentLoop {
 
   private async callLlmAnthropic(): Promise<ChatMessage> {
     const tools = this.getAvailableToolDefinitions().map(toAnthropicTool);
-    const { system, messages } = this.convertMessagesForAnthropic(await materializeScreenshots(this.messages));
+    const { system, messages } = this.convertMessagesForAnthropic(await materializeAttachments(await materializeScreenshots(this.messages)));
     if (this.aborted) throw new DOMException("Agent was stopped.", "AbortError");
 
     const enableCaching = this.config.enablePromptCaching;

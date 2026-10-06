@@ -494,6 +494,10 @@ export const PromptInput = ({
   const addLocal = useCallback(
     (fileList: File[] | FileList) => {
       const incoming = Array.from(fileList);
+      if (onFilesAdded) {
+        onFilesAdded(incoming);
+        return;
+      }
       const accepted = incoming.filter((f) => matchesAccept(f));
       if (incoming.length && accepted.length === 0) {
         onError?.({
@@ -510,11 +514,6 @@ export const PromptInput = ({
           code: "max_file_size",
           message: "All files exceed the maximum size.",
         });
-        return;
-      }
-
-      if (onFilesAdded) {
-        onFilesAdded(sized);
         return;
       }
 

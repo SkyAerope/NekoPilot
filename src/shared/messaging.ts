@@ -1,8 +1,22 @@
 // Side Panel 消息钩子 — 与 background service worker 通信
+import type { AgentConfig } from "../agent/types";
+import type { ChatAttachment } from "./attachments";
+
+export type AgentStartPayload = {
+  readonly userMessage: string;
+  readonly config: AgentConfig;
+  readonly attachments?: readonly ChatAttachment[];
+  readonly messageId?: number;
+  readonly retryTurnIndex?: number;
+};
+
+export function sendAgentStart(payload: AgentStartPayload): Promise<unknown> {
+  return sendMessage("agent:start", payload);
+}
 
 export function sendMessage<T = unknown>(
   type: string,
-  payload?: unknown
+  payload?: unknown,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type, payload }, (response) => {

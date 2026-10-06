@@ -29,7 +29,7 @@ export async function loadCollector(page: Page) {
   );
   await page.goto("/asset-test");
   await page.evaluate(
-    ({ assets, roots, lifecycle }) => {
+    ({ assets, roots, lifecycle, attachments }) => {
       const state: Window["__assetRoots"] = { local: {}, session: {} };
       const chromeMock = {
         storage: {
@@ -47,11 +47,12 @@ export async function loadCollector(page: Page) {
         configurable: true,
       });
       const store = new Function("exports", `${assets}; return exports;`)({});
+      const attachmentModule = new Function("exports", `${attachments}; return exports;`)({});
       const rootModule = new Function(
         "exports",
         "require",
         `${roots}; return exports;`,
-      )({}, () => store);
+      )({}, (name: string) => name === "./attachments" ? attachmentModule : store);
       const api = new Function(
         "exports",
         "require",
@@ -65,6 +66,7 @@ export async function loadCollector(page: Page) {
       assets: compile("src/shared/assets.ts"),
       roots: compile("src/shared/asset-roots.ts"),
       lifecycle: compile("src/shared/asset-lifecycle.ts"),
+      attachments: compile("src/shared/attachments.ts"),
     },
   );
 }

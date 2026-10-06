@@ -19,6 +19,7 @@
 ## 5. 组件与状态
 
 工具和步骤组使用 Radix Collapsible，保留键盘触发、`aria-expanded` 和 `aria-controls`。工具详情有展开、收折、加载、结果和错误状态；审批操作独立于详情的折叠状态。
+附件沿用 Paperclip 按钮和 ReferenceChip 文件名标签，不新增预览或动效。准备附件时保留草稿并禁用重复提交，使用 `role="status"` 提示；格式、大小和解码失败使用现有 `text-destructive` 与 `role="alert"`。支持纯附件提交，发送被后台接收后才清空草稿；重试和文字编辑保留原附件引用。
 
 ## 6. 动效
 

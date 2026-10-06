@@ -8,6 +8,8 @@ import type { AgentConfig, ChatMessage } from "../agent/types";
 import type { TargetTab, TargetTabStatus } from "../shared/target-tab";
 import { prependPageContext } from "../shared/page-context";
 import { migrateScreenshotHistory } from "../agent/screenshot-history";
+import { parseAttachments } from "../shared/attachments";
+import { readAttachment } from "../shared/attachment-files";
 import { AssetPins, acquireAssetPublication, collectOrphanAssets, screenshotEventRef, withAssetPublication, withConversationWrite } from "../shared/asset-lifecycle";
 
 // 开发期自动热重载：`pnpm dev`（vite build --watch）每次重建后会写入 dist/reload.json，
@@ -219,7 +221,7 @@ function persistHistory(): Promise<void> {
     } catch (error: unknown) {
       if (revision === historyRevision) {
         await unpublishedHistory.retain(snapshot.conversationHistory.flatMap((message) =>
-          Array.isArray(message.content) ? message.content.flatMap((part) => part.type === "screenshot" ? [part.screenshot.id] : []) : [],
+          Array.isArray(message.content) ? message.content.flatMap((part) => part.type === "screenshot" ? [part.screenshot.id] : part.type === "attachment" ? [part.attachment.asset.id] : []) : [],
         ));
       }
       throw error;
@@ -322,18 +324,29 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       try {
         publication = await acquireAssetPublication();
         await targetPinPending;
-        const { userMessage, config, messageId } = message.payload as {
+        const { userMessage, config, messageId, attachments: rawAttachments, retryTurnIndex } = message.payload as {
           userMessage: string;
           config: AgentConfig;
           messageId?: number;
+          attachments?: unknown;
+          retryTurnIndex?: number;
         };
+        const attachments = parseAttachments(rawAttachments);
+        await Promise.all(attachments.map(readAttachment));
         const tab = await getTargetTab();
         await cdp.attach(tab.id!);
         await selectTargetTab(tab, true);
         await historyReady;
+        if (retryTurnIndex !== undefined && (!Number.isInteger(retryTurnIndex) || retryTurnIndex < 0 || retryTurnIndex >= userTurnIndices.length)) throw new Error("重试轮次无效，请新建对话。");
+        const startRevision = historyRevision;
+        const turnCount = retryTurnIndex ?? userTurnIndices.length;
+        const cutAt = retryTurnIndex === undefined ? conversationHistory.length : userTurnIndices[retryTurnIndex];
+        const nextHistory = conversationHistory.slice(0, cutAt);
+        const nextIndices = userTurnIndices.slice(0, turnCount);
+        const nextTabs = userTurnTabs.slice(0, turnCount);
         const target = describeTab(tab);
-        const previousTarget = userTurnTabs[userTurnIndices.length - 1];
-        const firstTurn = userTurnIndices.length === 0;
+        const previousTarget = nextTabs[nextIndices.length - 1];
+        const firstTurn = nextIndices.length === 0;
         const switched =
           pendingTabSwitch ||
           (previousTarget != null && previousTarget.id !== target.id);
@@ -341,13 +354,26 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           firstTurn || switched
             ? prependPageContext(userMessage, target, !firstTurn)
             : userMessage;
-        userTurnIndices.push(conversationHistory.length);
-        userTurnTabs.push(target);
+        nextIndices.push(nextHistory.length);
+        nextTabs.push(target);
+        nextHistory.push({ role: "user", content: attachments.length ? [
+          ...(content ? [{ type: "text" as const, text: content }] : []),
+          ...attachments.map(attachment => ({ type: "attachment" as const, attachment })),
+        ] : content });
+        await withConversationWrite(async () => {
+          if (startRevision !== historyRevision) throw new Error("对话已变更，请重新发送。");
+          await chrome.storage.session.set({ [SESSION_KEY]: {
+            conversationHistory: nextHistory, userTurnIndices: nextIndices, userTurnTabs: nextTabs, pendingTabSwitch: false,
+          } });
+        });
+        conversationHistory = nextHistory;
+        userTurnIndices = nextIndices;
+        userTurnTabs = nextTabs;
         pendingTabSwitch = false;
-        conversationHistory.push({ role: "user", content });
-        await persistHistory();
+        historyRevision++;
+        await unpublishedHistory.clear();
         if (typeof messageId === "number") {
-          chrome.runtime
+          await chrome.runtime
             .sendMessage({
               type: "target:bound",
               payload: { messageId, target, showChip: firstTurn || switched },
