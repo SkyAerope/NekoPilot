@@ -1,4 +1,5 @@
 import type { TargetTab } from "../shared/target-tab";
+import type { ScreenshotRef } from "../shared/assets";
 
 export interface PickedElement {
   id: number;
@@ -29,6 +30,7 @@ export interface LogEntry {
   permissionResolved?: boolean;
   screenshotData?: string;
   screenshotMime?: string;
+  screenshot?: ScreenshotRef;
   prunedFromContext?: boolean;
   pickedElements?: PickedElement[];
   attachmentNames?: string[];

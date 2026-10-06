@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import type { AgentEvent } from "../../src/agent/types";
+import { screenshotModules } from "../helpers/screenshot-modules";
 
 for (const provider of ["openai", "anthropic"] as const) {
   for (const outcome of ["done", "error", "abort"] as const) {
@@ -19,6 +20,7 @@ for (const provider of ["openai", "anthropic"] as const) {
               delta: { type: "text_delta", text: "<think>正在思考" },
             };
       const runtime = { exports: {} as { AgentLoop: any } };
+      const screenshots = screenshotModules();
       runInNewContext(
         ts.transpileModule(source, {
           compilerOptions: {
@@ -29,6 +31,7 @@ for (const provider of ["openai", "anthropic"] as const) {
         {
           exports: runtime.exports,
           require: (name: string) => {
+            if (name in screenshots) return screenshots[name];
             if (name === "../tools/definitions") return { toolDefinitions: [] };
             if (name === "../tools/types") {
               return {

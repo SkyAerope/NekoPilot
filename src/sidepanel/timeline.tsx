@@ -370,7 +370,7 @@ function ToolCallStep({
             )}
           >
             {entry.toolName === "screenshot" &&
-            (entry.screenshotData || entry.toolResult === undefined) ? (
+             (entry.screenshot || entry.screenshotData || entry.toolResult === undefined) ? (
               <ScreenshotPreview entry={entry} image={screenshotImage} />
             ) : (
               <ToolDetails entry={entry} />

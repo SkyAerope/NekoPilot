@@ -7,6 +7,8 @@ import { AgentLoop } from "../agent/loop";
 import type { AgentConfig, ChatMessage } from "../agent/types";
 import type { TargetTab, TargetTabStatus } from "../shared/target-tab";
 import { prependPageContext } from "../shared/page-context";
+import { migrateScreenshotHistory } from "../agent/screenshot-history";
+import { AssetPins, acquireAssetPublication, collectOrphanAssets, screenshotEventRef, withAssetPublication, withConversationWrite } from "../shared/asset-lifecycle";
 
 // 开发期自动热重载：`pnpm dev`（vite build --watch）每次重建后会写入 dist/reload.json，
 // 这里轮询其时间戳，一旦变化就 chrome.runtime.reload() 自动重载整个扩展。
@@ -147,6 +149,8 @@ let conversationHistory: ChatMessage[] = [];
 let userTurnIndices: number[] = [];
 let userTurnTabs: (TargetTab | null)[] = [];
 let pendingTabSwitch = false;
+let historyRevision = 0;
+const unpublishedHistory = new AssetPins();
 
 // MV3 service worker 会在空闲时被回收。若仅把对话历史放在内存里，SW 重启后历史
 // 就丢了——这会造成"UI 还显示着历史，但实际请求里却没有历史"的不一致。
@@ -154,7 +158,7 @@ let pendingTabSwitch = false;
 const SESSION_KEY = "conversationState";
 
 /** SW 启动时尽快恢复内存中的会话历史 */
-const historyReady: Promise<void> = (async () => {
+const historyReady: Promise<void> = withAssetPublication(async () => {
   try {
     const data = await chrome.storage.session.get(SESSION_KEY);
     const state = data[SESSION_KEY] as
@@ -166,8 +170,16 @@ const historyReady: Promise<void> = (async () => {
         }
       | undefined;
     if (state) {
-      if (Array.isArray(state.conversationHistory))
+      if (Array.isArray(state.conversationHistory)) {
         conversationHistory = state.conversationHistory;
+        try {
+          const migrated = await migrateScreenshotHistory(conversationHistory);
+          await withConversationWrite(() => chrome.storage.session.set({ [SESSION_KEY]: { ...state, conversationHistory: migrated } }));
+          conversationHistory = migrated;
+        } catch (error) {
+          console.error("[NekoPilot] 截图历史迁移失败，保留原数据：", error);
+        }
+      }
       if (Array.isArray(state.userTurnIndices))
         userTurnIndices = state.userTurnIndices;
       userTurnTabs = userTurnIndices.map(
@@ -178,19 +190,41 @@ const historyReady: Promise<void> = (async () => {
   } catch {
     /* storage.session 不可用时忽略，退回纯内存行为 */
   }
-})();
+});
 
-function persistHistory(): void {
-  chrome.storage.session
-    .set({
-      [SESSION_KEY]: {
-        conversationHistory,
-        userTurnIndices,
-        userTurnTabs,
+// 不只依赖浏览器 onStartup；MV3 后台重新唤醒也需要处理遗留孤立文件。
+void historyReady.then(async () => {
+  const result = await collectOrphanAssets();
+  if (result.status === "failed") console.warn("[NekoPilot] 启动截图回收失败，保留文件：", result.error);
+});
+
+function persistHistory(): Promise<void> {
+  const revision = historyRevision;
+  const snapshot = {
+        conversationHistory: conversationHistory.map((message) => ({ ...message,
+          content: Array.isArray(message.content) ? message.content.map((part) => ({ ...part })) : message.content,
+        })),
+        userTurnIndices: [...userTurnIndices],
+        userTurnTabs: [...userTurnTabs],
         pendingTabSwitch,
-      },
-    })
-    .catch(() => {});
+  };
+  return withAssetPublication(async () => {
+    try {
+      const committed = await withConversationWrite(async () => {
+        if (revision !== historyRevision) return false;
+        await chrome.storage.session.set({ [SESSION_KEY]: snapshot });
+        return true;
+      });
+      if (committed) await unpublishedHistory.clear();
+    } catch (error: unknown) {
+      if (revision === historyRevision) {
+        await unpublishedHistory.retain(snapshot.conversationHistory.flatMap((message) =>
+          Array.isArray(message.content) ? message.content.flatMap((part) => part.type === "screenshot" ? [part.screenshot.id] : []) : [],
+        ));
+      }
+      throw error;
+    }
+  });
 }
 
 // 点击扩展图标时打开 side panel
@@ -241,7 +275,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         await historyReady;
         if (userTurnIndices.length > 0 && previousTabId !== tab.id) {
           pendingTabSwitch = true;
-          persistHistory();
+          await persistHistory();
         }
         return { ...(await getTargetStatus()), busy: false };
       } finally {
@@ -283,7 +317,10 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       agentBusy = true;
       notifyTargetChanged();
       stopRequested = false;
+      let publication: Awaited<ReturnType<typeof acquireAssetPublication>> | undefined;
+      const screenshotHandoffs: Promise<unknown>[] = [];
       try {
+        publication = await acquireAssetPublication();
         await targetPinPending;
         const { userMessage, config, messageId } = message.payload as {
           userMessage: string;
@@ -308,7 +345,7 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         userTurnTabs.push(target);
         pendingTabSwitch = false;
         conversationHistory.push({ role: "user", content });
-        persistHistory();
+        await persistHistory();
         if (typeof messageId === "number") {
           chrome.runtime
             .sendMessage({
@@ -334,16 +371,19 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
               ? config.codeExecutionMaxOutputChars
               : 6000,
         });
+        const runRevision = historyRevision;
         agentLoop = new AgentLoop(tools, config, (event) => {
-          chrome.runtime
-            .sendMessage({ type: "agent:event", payload: event })
-            .catch(() => {});
+          if (runRevision !== historyRevision) return;
+          const delivery = chrome.runtime.sendMessage({ type: "agent:event", payload: event }).catch(() => undefined);
+          if (screenshotEventRef(event)) screenshotHandoffs.push(delivery);
         });
         if (stopRequested) agentLoop.abort();
         try {
           const { text, messages } = await agentLoop.run(conversationHistory);
-          conversationHistory = messages;
-          persistHistory();
+          if (runRevision === historyRevision) {
+            conversationHistory = messages;
+            await persistHistory();
+          }
           agentLoop = null;
           return { result: text };
         } catch (err) {
@@ -366,6 +406,8 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
           throw err;
         }
       } finally {
+        await Promise.all(screenshotHandoffs);
+        await publication?.release();
         agentBusy = false;
         notifyTargetChanged();
       }
@@ -394,10 +436,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
         targetPinned = false;
         await cdp.detach();
         conversationHistory = [];
+        historyRevision++;
         userTurnIndices = [];
         userTurnTabs = [];
         pendingTabSwitch = false;
-        persistHistory();
+        await persistHistory();
         if (agentLoop) {
           agentLoop.abort();
           agentLoop = null;
@@ -414,11 +457,12 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       // 截断对话历史到第 turnIndex 个真用户消息之前（用于重试）
       const { turnIndex } = message.payload as { turnIndex: number };
       await historyReady;
+      historyRevision++;
       const cutAt = userTurnIndices[turnIndex] ?? conversationHistory.length;
       conversationHistory = conversationHistory.slice(0, cutAt);
       userTurnIndices = userTurnIndices.slice(0, turnIndex);
       userTurnTabs = userTurnTabs.slice(0, turnIndex);
-      persistHistory();
+      await persistHistory();
       if (agentLoop) {
         agentLoop.abort();
         agentLoop = null;

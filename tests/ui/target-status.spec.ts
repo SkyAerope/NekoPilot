@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import ts from "typescript";
+import { screenshotModules } from "../helpers/screenshot-modules";
 
 // 执行真实后台消息处理，只替换浏览器接口、CDP 和模型请求。
 async function createBackground() {
@@ -89,11 +90,12 @@ async function createBackground() {
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
+  const screenshots = screenshotModules();
   vm.runInNewContext(
     `${compiled}\nexports.handleMessage = handleMessage;\nexports.snapshot = () => ({ agentBusy, targetChanging, pickerBusy });`,
     {
       exports: runtime,
-      require: () => ({
+      require: (name: string) => screenshots[name] ?? ({
         CdpManager,
         ToolExecutor,
         AgentLoop,

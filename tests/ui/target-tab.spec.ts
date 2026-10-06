@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { screenshotModules } from "../helpers/screenshot-modules";
 
 function createBackground(session: Record<string, unknown> = {}) {
   const tabs = new Map([
@@ -168,6 +169,7 @@ function createBackground(session: Record<string, unknown> = {}) {
     }
   }
   loadModule("src/background/index.ts", {
+    ...screenshotModules(),
     "./cdp": cdpModule,
     "../tools/executor": { ToolExecutor: MockTools },
     "../agent/loop": { AgentLoop: MockLoop },

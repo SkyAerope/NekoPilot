@@ -1,4 +1,5 @@
 // Agent 类型定义
+import type { ScreenshotRef } from "../shared/assets";
 
 export interface AgentConfig {
   apiKey: string;
@@ -42,7 +43,7 @@ export interface AgentEvent {
 
 export type MessageContent =
   | string
-  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } } | { type: "screenshot"; screenshot: ScreenshotRef }>;
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";

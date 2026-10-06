@@ -45,7 +45,7 @@ export async function installHarness(
       },
       ...initialStorage,
     };
-    const messageListeners = new Set<(message: unknown) => void>();
+    const messageListeners = new Set<(message: unknown, sender: object, respond: (response: unknown) => void) => void>();
     const storageListeners = new Set<(changes: unknown) => void>();
     const messages: Harness["messages"] = [];
     const tabListeners = new Map<string, Set<() => void>>();
@@ -78,11 +78,11 @@ export async function installHarness(
       },
       emit: (event) =>
         messageListeners.forEach((listener) =>
-          listener({ type: "agent:event", payload: event }),
+          listener({ type: "agent:event", payload: event }, {}, () => {}),
         ),
       notifyTargetChanged: () =>
         messageListeners.forEach((listener) =>
-          listener({ type: "target:changed" }),
+          listener({ type: "target:changed" }, {}, () => {}),
         ),
       emitTabEvent: (type) =>
         tabListeners.get(type)?.forEach((listener) => listener()),
@@ -91,7 +91,7 @@ export async function installHarness(
           listener({
             type: "target:bound",
             payload: { messageId, target, showChip },
-          }),
+          }, {}, () => {}),
         ),
     };
     const chromeMock = {
@@ -104,9 +104,9 @@ export async function installHarness(
       runtime: {
         lastError: undefined,
         onMessage: {
-          addListener: (listener: (message: unknown) => void) =>
+          addListener: (listener: (message: unknown, sender: object, respond: (response: unknown) => void) => void) =>
             messageListeners.add(listener),
-          removeListener: (listener: (message: unknown) => void) =>
+          removeListener: (listener: (message: unknown, sender: object, respond: (response: unknown) => void) => void) =>
             messageListeners.delete(listener),
         },
         openOptionsPage: () => {},
@@ -205,16 +205,18 @@ export async function installHarness(
       },
       storage: {
         onChanged: changed,
+        session: { get: async () => ({}) },
         local: {
           onChanged: changed,
           get: (
             keys: string | string[],
-            callback: (result: Record<string, unknown>) => void,
+            callback?: (result: Record<string, unknown>) => void,
           ) => {
             const result: Record<string, unknown> = {};
             for (const key of typeof keys === "string" ? [keys] : keys)
               result[key] = storage[key];
-            queueMicrotask(() => callback(result));
+            if (callback) queueMicrotask(() => callback(result));
+            return Promise.resolve(result);
           },
           set: (values: Record<string, unknown>) => {
             const changes: Record<string, unknown> = {};
@@ -225,10 +227,12 @@ export async function installHarness(
             queueMicrotask(() =>
               storageListeners.forEach((listener) => listener(changes)),
             );
+            return Promise.resolve();
           },
           remove: (keys: string | string[]) => {
             for (const key of typeof keys === "string" ? [keys] : keys)
               delete storage[key];
+            return Promise.resolve();
           },
         },
       },

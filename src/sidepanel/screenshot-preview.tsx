@@ -17,7 +17,7 @@ export function ScreenshotPreview({
     readonly height: number;
     readonly animate: boolean;
   }>();
-  const data = entry.screenshotData ?? "";
+  const data = entry.screenshot || entry.screenshotData;
   const { src, size, ready, failed } = image;
 
   useLayoutEffect(() => {

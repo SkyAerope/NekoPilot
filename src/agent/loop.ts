@@ -3,6 +3,8 @@
 import type { ToolExecutor } from "../tools/executor";
 import { toolDefinitions } from "../tools/definitions";
 import { toOpenAiFunction, toAnthropicTool } from "../tools/types";
+import { isScreenshotRef, parseLegacyScreenshot, storeScreenshot } from "../shared/assets";
+import { materializeScreenshots } from "./screenshot-history";
 import type {
   AgentConfig,
   AgentEvent,
@@ -248,7 +250,7 @@ export class AgentLoop {
         && msg.content.some((p) => p.type === "text" && p.text === "[screenshot result]")) {
         const toolCallId = pendingIds.shift();
         // 已修剪过的占位消息没有 image_url，不计入存活截图
-        if (msg.content.some((p) => p.type === "image_url")) {
+        if (msg.content.some((p) => p.type === "image_url" || p.type === "screenshot")) {
           liveShots.push({ msgIdx: i, toolCallId });
         }
       }
@@ -290,7 +292,7 @@ export class AgentLoop {
 
     const body = {
       model: this.config.model,
-      messages: this.messages,
+      messages: await materializeScreenshots(this.messages),
       tools: functions,
       stream: true,
       // 要求每轮 SSE 最后一条 chunk 带 usage（prompt/completion/total tokens）。
@@ -298,6 +300,7 @@ export class AgentLoop {
       stream_options: { include_usage: true },
     };
 
+    if (this.aborted) throw new DOMException("Agent was stopped.", "AbortError");
     const resp = await fetch(`${this.config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -427,12 +430,12 @@ export class AgentLoop {
   // ── Anthropic Messages API ──
 
   /** 将内部 OpenAI 格式消息转为 Anthropic 格式 */
-  private convertMessagesForAnthropic(): { system: string; messages: unknown[] } {
+  private convertMessagesForAnthropic(source = this.messages): { system: string; messages: unknown[] } {
     let system = "";
     const out: unknown[] = [];
 
-    for (let i = 0; i < this.messages.length; i++) {
-      const msg = this.messages[i];
+    for (let i = 0; i < source.length; i++) {
+      const msg = source[i];
 
       if (msg.role === "system") {
         system = typeof msg.content === "string" ? msg.content : "";
@@ -484,11 +487,11 @@ export class AgentLoop {
         // 收集连续的 tool 消息为一个 user 消息的 tool_result blocks
         const toolBlocks: unknown[] = [];
         let j = i;
-        while (j < this.messages.length && this.messages[j].role === "tool") {
-          const tm = this.messages[j];
+        while (j < source.length && source[j].role === "tool") {
+          const tm = source[j];
           const resultContent = typeof tm.content === "string" ? tm.content : JSON.stringify(tm.content);
           // 检查下一条是否是 user 消息带截图（对应此 tool 的截图结果）
-          const next = this.messages[j + 1];
+          const next = source[j + 1];
           if (resultContent === "Screenshot captured successfully." && next?.role === "user" && Array.isArray(next.content)) {
             // 将截图（或修剪后的占位文本）直接嵌入 tool_result
             const imgParts = (next.content as Array<{ type: string; image_url?: { url: string }; text?: string }>);
@@ -533,7 +536,8 @@ export class AgentLoop {
 
   private async callLlmAnthropic(): Promise<ChatMessage> {
     const tools = this.getAvailableToolDefinitions().map(toAnthropicTool);
-    const { system, messages } = this.convertMessagesForAnthropic();
+    const { system, messages } = this.convertMessagesForAnthropic(await materializeScreenshots(this.messages));
+    if (this.aborted) throw new DOMException("Agent was stopped.", "AbortError");
 
     const enableCaching = this.config.enablePromptCaching;
 
@@ -808,6 +812,12 @@ export class AgentLoop {
 
     const result = await this.tools.execute(name, params);
 
+    if (name === "screenshot" && result.success) {
+      const shot = parseLegacyScreenshot(result.data);
+      if (!shot) throw new TypeError("Invalid screenshot result");
+      result.data = await storeScreenshot(shot);
+    }
+
     this.emit({
       type: "tool_result",
       data: { name, result, id: toolCall.id },
@@ -815,9 +825,7 @@ export class AgentLoop {
 
     // 将结果加入消息历史
     if (name === "screenshot" && result.success) {
-      const shot = result.data as { data: string; mime: string } | string;
-      const dataB64 = typeof shot === "string" ? shot : shot.data;
-      const mime = typeof shot === "string" ? "image/png" : shot.mime;
+      if (!isScreenshotRef(result.data)) throw new TypeError("Invalid screenshot reference");
       // tool 消息只能是字符串，图片需通过 user 消息传入
       this.messages.push({
         role: "tool",
@@ -829,7 +837,7 @@ export class AgentLoop {
         role: "user",
         content: [
           { type: "text", text: "[screenshot result]" },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${dataB64}` } },
+          { type: "screenshot", screenshot: result.data },
         ],
       });
     } else {

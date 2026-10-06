@@ -60,6 +60,9 @@ import type { AgentEvent } from "../agent/types";
 import type { TargetTabBinding, TargetTabStatus } from "../shared/target-tab";
 import { TabSelector } from "./tab-selector";
 import { TabIcon } from "./tab-icon";
+import { isScreenshotRef } from "../shared/assets";
+import { migrateScreenshotLogs, screenshotIds } from "./screenshot-storage";
+import { AssetPins, collectOrphanAssets, screenshotEventRef, withAssetPublication, withConversationWrite } from "../shared/asset-lifecycle";
 
 let logIdCounter = 0;
 
@@ -119,45 +122,76 @@ export default function App() {
   // 但 background 仍保留 conversationHistory，会导致"UI 清空但请求仍带历史"。
   // 这里把 UI 的 logs 也持久化下来并在打开时恢复，使两端保持一致。
   const logsLoadedRef = useRef(false);
+  const logsGenerationRef = useRef(0);
+  const [assetPins] = useState(() => new AssetPins());
 
   // 加载持久化设置 + 历史对话
   useEffect(() => {
-    chrome.storage.local.get(
-      ["autoMode", "settings", "chatLogs", "chatMeta"],
-      (data) => {
+    let active = true;
+    const generation = logsGenerationRef.current;
+    void withAssetPublication(async () => {
+        const data = await chrome.storage.local.get(["autoMode", "settings", "chatLogs", "chatMeta"]);
+        if (!active || generation !== logsGenerationRef.current) return;
         if (data.autoMode !== undefined) setAutoMode(data.autoMode);
         if (data.settings?.elementTextLimit != null)
           setElementTextLimit(data.settings.elementTextLimit);
         if (Array.isArray(data.chatLogs) && data.chatLogs.length > 0) {
-          setLogs(data.chatLogs as LogEntry[]);
-          // 恢复 logIdCounter，避免新条目 id 与已恢复条目冲突
-          const maxId = (data.chatLogs as LogEntry[]).reduce(
-            (m, l) => Math.max(m, l.id),
-            0,
-          );
-          if (maxId > logIdCounter) logIdCounter = maxId;
+          const restored = data.chatLogs as LogEntry[];
+          // 迁移可能异步等待；新消息创建前先恢复计数器。
+          logIdCounter = restored.reduce((maximum, entry) => Math.max(maximum, entry.id), logIdCounter);
+          try {
+              const migrated = await migrateScreenshotLogs(restored);
+              if (!active || generation !== logsGenerationRef.current) return;
+              await assetPins.retain(screenshotIds(migrated));
+              if (!active || generation !== logsGenerationRef.current) return;
+              logsLoadedRef.current = true;
+              setLogs((previous) => [...migrated, ...previous]);
+          } catch (error: unknown) {
+              if (!active || generation !== logsGenerationRef.current) return;
+              await assetPins.retain(screenshotIds(restored));
+              if (!active || generation !== logsGenerationRef.current) return;
+              logsLoadedRef.current = true;
+              setLogs((previous) => [...restored, ...previous, {
+                id: ++logIdCounter, type: "error", content: `截图迁移失败，已保留原数据：${getErrorMessage(error)}`, timestamp: Date.now(),
+              }]);
+          }
         }
         if (data.chatMeta) {
           if (typeof data.chatMeta.promptTokens === "number")
             setPromptTokens(data.chatMeta.promptTokens);
           if (data.chatMeta.cacheInfo) setCacheInfo(data.chatMeta.cacheInfo);
         }
-        logsLoadedRef.current = true;
-      },
-    );
-  }, []);
+        if (!Array.isArray(data.chatLogs) || data.chatLogs.length === 0)
+          logsLoadedRef.current = true;
+    }).catch((error: unknown) => {
+      if (active) setTargetError(`读取聊天记录失败，未覆盖原数据：${getErrorMessage(error)}`);
+    });
+    return () => { active = false; void assetPins.clear(); };
+  }, [assetPins]);
 
   // 持久化对话记录（防抖），让关闭/重开侧边栏后仍能保留历史
   useEffect(() => {
     if (!logsLoadedRef.current) return;
+    let active = true;
+    const generation = logsGenerationRef.current;
     const timer = setTimeout(() => {
-      chrome.storage.local.set({
-        chatLogs: logs,
-        chatMeta: { promptTokens, cacheInfo },
+      void withAssetPublication(async () => {
+        const migrated = await migrateScreenshotLogs(logs);
+        if (!active || generation !== logsGenerationRef.current) return;
+        await assetPins.retain(screenshotIds(migrated));
+        await withConversationWrite(async () => {
+          if (!active || generation !== logsGenerationRef.current) return;
+          await chrome.storage.local.set({
+          chatLogs: migrated,
+          chatMeta: { promptTokens, cacheInfo },
+        });
+        });
+      }).catch((error: unknown) => {
+        if (active) console.error("[NekoPilot] 截图日志保存失败，保留原数据：", error);
       });
     }, 300);
-    return () => clearTimeout(timer);
-  }, [logs, promptTokens, cacheInfo]);
+    return () => { active = false; clearTimeout(timer); };
+  }, [logs, promptTokens, cacheInfo, assetPins]);
 
   // 轮询元素选择器 hover 信息
   useEffect(() => {
@@ -180,7 +214,7 @@ export default function App() {
 
   // 监听 agent 事件
   useEffect(() => {
-    const listener = (message: {
+    const processMessage = (message: {
       type: string;
       payload?: AgentEvent | TargetTabBinding;
     }) => {
@@ -408,7 +442,9 @@ export default function App() {
                     : JSON.stringify(resultData, null, 2);
               const shotInfo =
                 data.name === "screenshot" && data.result.success
-                  ? typeof data.result.data === "string"
+                  ? isScreenshotRef(data.result.data)
+                    ? null
+                    : typeof data.result.data === "string"
                     ? { data: data.result.data as string, mime: "image/png" }
                     : (data.result.data as { data: string; mime: string })
                   : null;
@@ -433,10 +469,11 @@ export default function App() {
               }
               return {
                 ...log,
-                toolResult: formatted,
+                toolResult: isScreenshotRef(data.result.data) ? "Screenshot captured successfully." : formatted,
                 toolSuccess: semanticSuccess,
                 screenshotData: shotInfo?.data,
                 screenshotMime: shotInfo?.mime,
+                screenshot: isScreenshotRef(data.result.data) ? data.result.data : undefined,
               };
             }
             return log;
@@ -553,6 +590,25 @@ export default function App() {
           },
         ]);
       }
+    };
+    const listener = (
+      message: Parameters<typeof processMessage>[0],
+      _sender: chrome.runtime.MessageSender,
+      respond: (response: unknown) => void,
+    ) => {
+      const payload = message.payload;
+      const screenshot = message.type === "agent:event" && payload && "data" in payload
+        ? screenshotEventRef(payload) : undefined;
+      if (!screenshot) return processMessage(message);
+      const generation = logsGenerationRef.current;
+      void assetPins.retain([screenshot.id]).then(() => {
+        if (generation === logsGenerationRef.current) processMessage(message);
+        respond({ ok: true });
+      }, (error: unknown) => {
+        setTargetError(getErrorMessage(error));
+        respond({ error: getErrorMessage(error) });
+      });
+      return true;
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
@@ -833,21 +889,28 @@ export default function App() {
   }, []);
 
   const handleClearChat = useCallback(async () => {
+    setSwitchingTab(true);
     try {
       await sendMessage("agent:reset");
+      logsGenerationRef.current++;
+      await withAssetPublication(() => withConversationWrite(() => chrome.storage.local.remove(["chatLogs", "chatMeta"])));
+      logsLoadedRef.current = true;
+      setLogs([]);
+      setEditingMessage(null);
+      setPromptTokens(null);
+      setCacheInfo(null);
+      setPickedElements([]);
+      setTargetError(null);
+      await assetPins.clear();
+      const collection = await collectOrphanAssets();
+      if (collection.status === "failed") console.warn("[NekoPilot] 截图回收失败，保留文件：", collection.error);
+      await refreshTargetStatus();
     } catch (error) {
       setTargetError(getErrorMessage(error));
-      return;
+    } finally {
+      setSwitchingTab(false);
     }
-    setLogs([]);
-    setEditingMessage(null);
-    setPromptTokens(null);
-    setCacheInfo(null);
-    setPickedElements([]);
-    setTargetError(null);
-    chrome.storage.local.remove(["chatLogs", "chatMeta"]);
-    await refreshTargetStatus();
-  }, [refreshTargetStatus]);
+  }, [refreshTargetStatus, assetPins]);
 
   const handleApprove = useCallback((toolCallId: string) => {
     sendMessage("agent:approve");

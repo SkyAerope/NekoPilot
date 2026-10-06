@@ -141,6 +141,7 @@ flowchart TD
 ## 隐私
 
 - API Key 仅保存在本地浏览器的 `chrome.storage.local`。
+- 截图正文保存在扩展本地的 IndexedDB，聊天日志和模型会话只保存文件引用；旧截图自动迁移。存储边界与解码基准见[截图存储说明](docs/screenshot-storage.md)。
 - 所有 LLM 请求由扩展直连你配置的提供商。
 - 截图、页面文本只发送给你选定的模型。
 
