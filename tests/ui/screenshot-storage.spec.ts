@@ -55,7 +55,7 @@ test("旧截图迁移后只保存引用，摘除标记保留且可预览", async
       prunedFromContext: true,
     },
   ]);
-  await page.getByRole("button", { name: /Take screenshot/ }).click();
+  await page.getByRole("button", { name: /截图/ }).click();
   await expect(page.getByAltText("浏览器截图")).toHaveAttribute(
     "src",
     /^blob:/,
@@ -96,7 +96,7 @@ test("迁移未完成时清空对话，旧异步结果不会恢复日志", async
     .poll(() => page.evaluate(() => window.__harness.storage.chatLogs))
     .toEqual([]);
   await expect(
-    page.getByRole("button", { name: /Take screenshot/ }),
+    page.getByRole("button", { name: /截图/ }),
   ).toHaveCount(0);
   await expect.poll(() => assetKeys(page)).toEqual([]);
 });
@@ -131,7 +131,7 @@ test("新建对话等待已提交的保存，再回收不再被引用的截图",
     if (typeof release === "function") release();
   });
   // Then：旧保存完成后清空才提交，截图不复活且 Blob 被回收。
-  await expect(page.getByRole("button", { name: /Take screenshot/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /截图/ })).toHaveCount(0);
   await expect.poll(() => assetKeys(page)).toEqual([]);
   const stored = await page.evaluate(() => window.__harness.storage.chatLogs);
   expect(stored === undefined || (Array.isArray(stored) && stored.length === 0)).toBe(true);
@@ -168,7 +168,7 @@ test("迁移期间发送新消息，恢复后保留旧截图与新消息", async
   });
   // Then：既不覆盖新消息，也不丢弃旧截图。
   await expect(
-    page.getByRole("button", { name: /Take screenshot/ }),
+    page.getByRole("button", { name: /截图/ }),
   ).toBeVisible();
   await expect(
     page.getByText("new turn during migration", { exact: true }),
@@ -199,7 +199,7 @@ test("引用的文件缺失时显示终止失败状态，不无限加载", async
   });
   await page.goto("/sidepanel.html");
   // When：展开预览。
-  await page.getByRole("button", { name: /Take screenshot/ }).click();
+  await page.getByRole("button", { name: /截图/ }).click();
   // Then：显示明确失败且不泄漏空白图片。
   await expect(page.getByText("截图加载失败", { exact: true })).toBeVisible();
   await expect(page.getByAltText("浏览器截图")).toHaveCount(0);
@@ -239,7 +239,7 @@ test("清空对话释放已预解码截图的 Blob URL", async ({ page }) => {
     ],
   });
   await page.goto("/sidepanel.html");
-  await page.getByRole("button", { name: /Take screenshot/ }).hover();
+  await page.getByRole("button", { name: /截图/ }).hover();
   await expect(page.locator("html")).toHaveAttribute("data-live-urls", "1");
   // When：清空对话。
   await page.getByRole("button", { name: "新建对话" }).click();

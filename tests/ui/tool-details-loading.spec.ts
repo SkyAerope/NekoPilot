@@ -45,7 +45,7 @@ for (const theme of ["light", "dark"] as const) {
     );
     try {
       await page.goto("/sidepanel.html");
-      await page.getByRole("button", { name: /Run JS/ }).click();
+      await page.getByRole("button", { name: /执行 JS 代码/ }).click();
       await expect(
         page.getByRole("tablist", { name: "工具详情" }),
       ).toBeVisible();
@@ -106,7 +106,7 @@ test("高亮模块加载失败时保留工具参数与复制操作", async ({ pa
       },
     }),
   );
-  await page.getByRole("button", { name: /Click/ }).click();
+  await page.getByRole("button", { name: /点击/ }).click();
   await expect(page.locator("code:visible")).toContainText("#submit");
   await expect(
     page.getByRole("button", { name: "复制参数", exact: true }),

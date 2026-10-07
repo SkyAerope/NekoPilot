@@ -36,7 +36,7 @@ test("大截图重新展开时不重新等待图片或重复淡入", async ({ pa
     ],
   });
   await page.goto("/sidepanel.html");
-  const trigger = page.getByRole("button", { name: /Take screenshot/ });
+  const trigger = page.getByRole("button", { name: /截图/ });
   const sampleOpening = () =>
     trigger.evaluate(async (element) => {
       const frames: {
@@ -115,7 +115,7 @@ test("移入大截图标题时预解码，首次展开不再等待图片", async
     ],
   });
   await page.goto("/sidepanel.html");
-  const trigger = page.getByRole("button", { name: /Take screenshot/ });
+  const trigger = page.getByRole("button", { name: /截图/ });
   await trigger.hover();
   await expect(page.locator("html")).toHaveAttribute(
     "data-image-decoded",
@@ -162,7 +162,7 @@ test("PNG 截图打开时预留比例，不等待代码详情模块", async ({ p
   });
   await page.route("**/chunks/tool-details-*.js", (route) => route.abort());
   await page.goto("/sidepanel.html");
-  await page.getByRole("button", { name: /Take screenshot/ }).click();
+  await page.getByRole("button", { name: /截图/ }).click();
   const image = page.getByAltText("浏览器截图");
   await expect(image).toBeVisible();
   await expect(image).toHaveAttribute("width", "640");
@@ -189,7 +189,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
       name: "screenshot",
       args: "{}",
     });
-    await page.getByRole("button", { name: /Take screenshot/ }).click();
+    await page.getByRole("button", { name: /截图/ }).click();
     await expect(page.getByText("正在截屏…", { exact: true })).toBeVisible();
     const preview = page.locator('[data-slot="screenshot-preview"]');
     await expect(preview).toBeVisible();

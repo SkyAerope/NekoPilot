@@ -15,7 +15,7 @@ test("工具组内展开详情在不同宽度保持布局", async ({ page }, tes
     name: "wait",
     args: '{"ms":100}',
   });
-  await page.getByRole("button", { name: /Click/ }).click();
+  await page.getByRole("button", { name: /点击/ }).click();
   await expect(page.locator("code:visible")).toContainText("#submit");
   for (const width of [375, 768, 1280]) {
     // When
@@ -136,7 +136,7 @@ for (const kind of ["工具", "工具组"] as const) {
     });
     const trigger =
       kind === "工具"
-        ? page.getByRole("button", { name: /Click/ })
+        ? page.getByRole("button", { name: /点击/ })
         : page.getByRole("button", { name: "2 steps", exact: true });
     if (kind === "工具组") {
       await emit(page, "tool_call", {
@@ -145,7 +145,7 @@ for (const kind of ["工具", "工具组"] as const) {
         args: '{"ms":100}',
       });
       await trigger.click();
-      await expect(page.getByRole("button", { name: /Click/ })).toBeHidden();
+      await expect(page.getByRole("button", { name: /点击/ })).toBeHidden();
     }
 
     // When / Then: 展开确实经过中间高度，而不是只淡入内容。
@@ -180,7 +180,7 @@ test("减少动态效果时工具与工具组立即切换，折叠详情不隐�
     args: '{"selector":"#submit"}',
     needsPermission: true,
   });
-  const trigger = page.getByRole("button", { name: /Click/ });
+  const trigger = page.getByRole("button", { name: /点击/ });
   await trigger.click();
   const contentId = await trigger.getAttribute("aria-controls");
   const content = page.locator(`[id="${contentId}"]`);

@@ -251,7 +251,7 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
     >
       <ReasoningTrigger disabled={!content} className={stepTriggerClassName}>
         <span className="shrink-0 font-medium">
-          {done ? `已思考 ${entry.thinkSeconds ?? 1} 秒` : "Thinking…"}
+          {done ? `思考 ${entry.thinkSeconds ?? 1} 秒` : "Thinking…"}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70 transition-colors group-hover/step:text-foreground">
           {!open && preview}

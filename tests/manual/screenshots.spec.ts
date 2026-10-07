@@ -14,7 +14,7 @@ test("暗色审批展示和设置布局", async ({ page }) => {
     }),
     needsPermission: true,
   });
-  await page.getByRole("button", { name: /Run JS/ }).click();
+  await page.getByRole("button", { name: /执行 JS 代码/ }).click();
   await expect(
     page.getByRole("button", { name: "允许", exact: true }),
   ).toBeVisible();

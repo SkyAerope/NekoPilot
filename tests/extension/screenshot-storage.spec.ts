@@ -185,7 +185,7 @@ for (const provider of ["openai", "anthropic"] as const) {
       if ((await steps.getAttribute("aria-expanded")) !== "true")
         await steps.click();
       await panel
-        .getByRole("button", { name: /Take screenshot/ })
+        .getByRole("button", { name: /截图/ })
         .first()
         .click();
       await expect(panel.getByAltText("浏览器截图")).toHaveAttribute(
@@ -243,14 +243,14 @@ for (const provider of ["openai", "anthropic"] as const) {
       if ((await restoredSteps.getAttribute("aria-expanded")) !== "true")
         await restoredSteps.click();
       await panel
-        .getByRole("button", { name: /Take screenshot/ })
+        .getByRole("button", { name: /截图/ })
         .first()
         .click();
       await expect(panel.getByAltText("浏览器截图")).toBeVisible();
       await expect(panel.getByText("已从上下文删除")).toBeVisible();
       await panel.getByRole("button", { name: "新建对话" }).click();
       await expect.poll(() => assetKeys(panel)).toEqual([]);
-      await expect(panel.getByRole("button", { name: /Take screenshot/ })).toHaveCount(0);
+      await expect(panel.getByRole("button", { name: /截图/ })).toHaveCount(0);
     } finally {
       await context.close();
       await new Promise<void>((resolve, reject) =>

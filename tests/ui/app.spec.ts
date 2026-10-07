@@ -1029,7 +1029,7 @@ test("工具审批与参数展示不依赖 AI SDK 后端", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "允许", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /Click/ }).click();
+  await page.getByRole("button", { name: /点击/ }).click();
   await expect(page.locator("code:visible")).toContainText("#submit");
   await page.getByRole("button", { name: "允许", exact: true }).click();
   await expect
@@ -1078,7 +1078,7 @@ test("完成标记工具隐藏标签页但保留失败结果", async ({ page }) 
     args: '{"ms":200}',
     needsPermission: false,
   });
-  await page.getByRole("button", { name: /Wait/ }).click();
+  await page.getByRole("button", { name: /等待/ }).click();
   await expect(page.locator("code:visible")).toContainText('"ms": 200');
   await expect(page.getByRole("tab")).toHaveCount(0);
   await emit(page, "tool_result", {
@@ -1094,7 +1094,7 @@ test("完成标记工具隐藏标签页但保留失败结果", async ({ page }) 
     args: '{"selector":"#missing"}',
     needsPermission: false,
   });
-  await page.getByRole("button", { name: /Click/ }).click();
+  await page.getByRole("button", { name: /点击/ }).click();
   await expect(page.getByRole("tab")).toHaveCount(0);
   await emit(page, "tool_result", {
     id: "click-1",
@@ -1131,7 +1131,7 @@ test("恢复历史、截图裁剪标记与重试回滚", async ({ page }) => {
   });
   await page.goto("/sidepanel.html");
   await expect(page.getByText("页面已检查", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /Take screenshot/ }).click();
+  await page.getByRole("button", { name: /截图/ }).click();
   await expect(page.getByAltText("浏览器截图")).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   await emit(page, "screenshots_pruned", { ids: ["shot-1"] });
@@ -1234,11 +1234,11 @@ test("流式思考、步骤分组和手动折叠", async ({ page }) => {
     result: { success: true, data: "页面结构" },
   });
   await expect(
-    page.getByRole("button", { name: /Read page structure/ }),
+    page.getByRole("button", { name: /读取页面结构/ }),
   ).toHaveCount(0);
   await page.getByRole("button", { name: "2 steps", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: /Read page structure/ }),
+    page.getByRole("button", { name: /读取页面结构/ }),
   ).toBeVisible();
 });
 
@@ -1263,9 +1263,9 @@ test("空白正文合并前后步骤，后续流式正文仍能显示", async ({
   await expect(group).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator(".is-assistant")).toHaveCount(1);
   await expect(
-    page.getByRole("button", { name: /Read page structure/ }),
+    page.getByRole("button", { name: /读取页面结构/ }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: /Wait/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /等待/ })).toBeVisible();
 
   await emit(page, "message_delta", "页面分析完成");
   await expect(page.getByText("页面分析完成", { exact: true })).toBeVisible();
@@ -1280,7 +1280,7 @@ test("截图详情只展示结果，等待和失败时也没有标签页", async
     name: "screenshot",
     args: "{}",
   });
-  await page.getByRole("button", { name: /Take screenshot/ }).click();
+  await page.getByRole("button", { name: /截图/ }).click();
   await expect(page.getByText("正在截屏…", { exact: true })).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   await emit(page, "tool_result", {
@@ -1324,7 +1324,7 @@ for (const eventType of [
         ? { name: "read_page", args: "{}", id: "thinking-tool" }
         : "下一阶段",
     );
-    const completed = page.getByRole("button", { name: /已思考/ });
+    const completed = page.getByRole("button", { name: /思考/ });
     await expect(completed).toHaveCount(1);
     await expect(completed.locator("svg.animate-spin")).toHaveCount(0);
     const label = await completed.textContent();
@@ -1370,7 +1370,7 @@ test("主动停止思考不依赖后台发送完成事件", async ({ page }) => 
   await emit(page, "thinking", "正在检查");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /已思考/ })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /思考/ })).toHaveCount(1);
   expect(
     await page.evaluate(() =>
       window.__harness.messages.some(
@@ -1385,7 +1385,7 @@ test("新思考关闭上一条且标签思考能跨增量继续", async ({ page 
   await page.goto("/sidepanel.html");
   await emit(page, "thinking", "第一段");
   await emit(page, "thinking", "第二段");
-  await expect(page.getByRole("button", { name: /已思考/ })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /思考/ })).toHaveCount(1);
   await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(1);
   await emit(page, "message", "");
   await emit(page, "message_delta", "<think>第三段");
@@ -1394,7 +1394,7 @@ test("新思考关闭上一条且标签思考能跨增量继续", async ({ page 
   await expect(page.getByText("第三段仍在思考", { exact: true })).toBeVisible();
   await emit(page, "assistant_turn_done", "");
   await expect(page.getByRole("button", { name: /Thinking/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /已思考/ })).toHaveCount(3);
+  await expect(page.getByRole("button", { name: /思考/ })).toHaveCount(3);
 });
 
 test("思考转圈和完成勾选保持在同一位置", async ({ page }) => {
@@ -1405,7 +1405,7 @@ test("思考转圈和完成勾选保持在同一位置", async ({ page }) => {
   const spinner = await thinking.locator("svg.animate-spin").boundingBox();
   expect(spinner).not.toBeNull();
   await emit(page, "assistant_turn_done", {});
-  const completed = page.getByRole("button", { name: /已思考/ });
+  const completed = page.getByRole("button", { name: /思考/ });
   await expect(completed.locator("svg.animate-spin")).toHaveCount(0);
   const check = await completed.locator("svg").first().boundingBox();
   expect(check).not.toBeNull();
@@ -1649,11 +1649,11 @@ test("思考过程与多步工具的混合时间线展示", async ({ page }) => 
   const group = page.getByRole("button", { name: "4 steps", exact: true });
   if ((await group.getAttribute("aria-expanded")) === "false")
     await group.click();
-  await page.getByRole("button", { name: /已思考 2 秒/ }).click();
+  await page.getByRole("button", { name: /思考 2 秒/ }).click();
   await expect(
     page.getByText("先读取订单信息，再核对金额。", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /Run JS/ }).click();
+  await page.getByRole("button", { name: /执行 JS 代码/ }).click();
   await expect(
     page.getByRole("tab", { name: "结果", exact: true }),
   ).toBeVisible();
@@ -1670,7 +1670,7 @@ for (const description of [
   "核对订单总额",
   "检查订单条目并计算总额。".repeat(10),
 ]) {
-  test(`Run JS 描述收起时显示摘要，展开时只显示完整详情：${description.length}`, async ({
+  test(`执行 JS 代码 描述收起时显示摘要，展开时只显示完整详情：${description.length}`, async ({
     page,
   }) => {
     await installHarness(page, {
@@ -1688,7 +1688,7 @@ for (const description of [
       ],
     });
     await page.goto("/sidepanel.html");
-    const header = page.getByRole("button", { name: /Run JS/ });
+    const header = page.getByRole("button", { name: /执行 JS 代码/ });
     const summary = header.locator("span.truncate");
     await expect(summary).toHaveText(description);
     await expect(summary).toHaveAttribute("title", description);
@@ -1749,7 +1749,7 @@ for (const toolName of ["read_page", "execute_js"]) {
     await page.goto("/sidepanel.html");
     await page
       .getByRole("button", {
-        name: toolName === "execute_js" ? /Run JS/ : /Read page structure/,
+        name: toolName === "execute_js" ? /执行 JS 代码/ : /读取页面结构/,
       })
       .click();
     const tabs = page.getByRole("tablist", { name: "工具详情" });
@@ -1827,7 +1827,7 @@ for (const theme of ["light", "dark"] as const) {
       await page.goto("/sidepanel.html");
       await page
         .getByRole("button", {
-          name: tab === "参数" ? /Read page structure/ : /Run JS/,
+          name: tab === "参数" ? /读取页面结构/ : /执行 JS 代码/,
         })
         .click();
       await page.getByRole("tab", { name: tab, exact: true }).click();
@@ -1960,13 +1960,13 @@ for (const theme of ["light", "dark"]) {
     const group = page.getByRole("button", { name: "4 steps", exact: true });
     if ((await group.getAttribute("aria-expanded")) === "false")
       await group.click();
-    await page.getByRole("button", { name: /Run JS/ }).click();
+    await page.getByRole("button", { name: /执行 JS 代码/ }).click();
     await expect(
       page.getByRole("tab", { name: "结果", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
     await page.getByRole("tab", { name: "代码", exact: true }).click();
     await expect(page.locator("code:visible")).toContainText("const amounts");
-    await page.getByRole("button", { name: /Click/ }).click();
+    await page.getByRole("button", { name: /点击/ }).click();
     await expect(
       page.getByRole("button", { name: "允许", exact: true }),
     ).toBeVisible();
@@ -1981,7 +1981,7 @@ for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width: 320, height: 800 });
     await expectNoOverflow(page);
     await group.click();
-    await expect(page.getByRole("button", { name: /Run JS/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /执行 JS 代码/ })).toHaveCount(0);
     await expect(group).toContainText("待审批");
     await expect(page.getByText("待审批", { exact: true })).toHaveCount(1);
     expect(errors).toEqual([]);

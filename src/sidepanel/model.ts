@@ -86,24 +86,24 @@ export function splitThinkText(raw: string): { think: string; body: string } {
 
 export function getToolLabel(name?: string): string {
   const labels: Record<string, string> = {
-    execute_js: "Run JS",
-    screenshot: "Take screenshot",
-    read_page_text: "Extract page text",
-    read_page: "Read page structure",
-    read_page_interactive: "Find interactive elements",
-    click: "Click",
-    keyboard_type: "Keyboard input",
-    scroll: "Scroll page",
-    hover: "Hover",
-    handle_dialog: "Handle dialog",
-    navigate: "Navigate",
-    wait: "Wait",
-    find_element: "Find element",
-    get_element_text: "Get element text",
-    get_element_rect: "Get element position",
-    drag: "Drag",
+    execute_js: "执行 JS 代码",
+    screenshot: "截图",
+    read_page_text: "读取页面文本",
+    read_page: "读取页面结构",
+    read_page_interactive: "查找可交互元素",
+    click: "点击",
+    keyboard_type: "输入文本",
+    scroll: "滚动页面",
+    hover: "悬停鼠标",
+    handle_dialog: "与对话框交互",
+    navigate: "打开网址",
+    wait: "等待",
+    find_element: "查找元素",
+    get_element_text: "读取元素文本",
+    get_element_rect: "获取元素位置与尺寸",
+    drag: "拖拽",
   };
-  return labels[name ?? ""] ?? name ?? "Tool";
+  return labels[name ?? ""] ?? name ?? "工具";
 }
 
 /** 从工具的原始 args (JSON 字符串) 中提取一段简短的副标题，用于在审批时让用户看到关键参数 */
