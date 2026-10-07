@@ -43,7 +43,7 @@ import {
 } from "./model";
 
 const stepTriggerClassName =
-  "flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-left text-xs transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+  "group/step flex h-8 w-full min-w-0 items-center gap-2 rounded-md pl-0 pr-2.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 const approvalBadgeClassName =
   "shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-300";
 
@@ -250,10 +250,10 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
       duration={entry.thinkSeconds}
     >
       <ReasoningTrigger disabled={!content} className={stepTriggerClassName}>
-        <span className="shrink-0 font-medium text-muted-foreground">
+        <span className="shrink-0 font-medium">
           {done ? `已思考 ${entry.thinkSeconds ?? 1} 秒` : "Thinking…"}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70">
+        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70 transition-colors group-hover/step:text-foreground">
           {!open && preview}
         </span>
         {done ? (
@@ -330,11 +330,11 @@ function ToolCallStep({
           if (entry.toolName === "screenshot") setPrewarmScreenshot(true);
         }}
       >
-        <span className="shrink-0 font-medium text-muted-foreground">
+        <span className="shrink-0 font-medium">
           {getToolLabel(entry.toolName)}
         </span>
         <span
-          className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70"
+          className="min-w-0 flex-1 truncate font-mono text-muted-foreground/70 transition-colors group-hover/step:text-foreground"
           title={headerSubtitle || undefined}
         >
           {headerSubtitle}
