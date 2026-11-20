@@ -44,8 +44,7 @@ export class AttachmentError extends Error {
       | "image_dimensions"
       | "invalid_reference"
       | "storage_failed"
-      | "missing"
-      | "request_too_large",
+      | "missing",
     message: string,
   ) {
     super(message);

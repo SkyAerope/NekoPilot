@@ -7,7 +7,7 @@ import type { ChatMessage, MessageContent } from "./types";
 export async function materializeAttachments(
   messages: ChatMessage[],
 ): Promise<ChatMessage[]> {
-  const result = await Promise.all(
+  return Promise.all(
     messages.map(async (message) => {
       if (!Array.isArray(message.content)) return message;
       const content: Exclude<MessageContent, string> = [];
@@ -49,21 +49,4 @@ export async function materializeAttachments(
       return { ...message, content };
     }),
   );
-  const imageCount = result.reduce(
-    (count, message) =>
-      count +
-      (Array.isArray(message.content)
-        ? message.content.filter((part) => part.type === "image_url").length
-        : 0),
-    0,
-  );
-  if (
-    imageCount > 20 ||
-    new TextEncoder().encode(JSON.stringify(result)).length > 20 * 1024 * 1024
-  )
-    throw new AttachmentError(
-      "request_too_large",
-      "附件上下文过大，请减少附件或新建对话",
-    );
-  return result;
 }
