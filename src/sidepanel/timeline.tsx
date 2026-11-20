@@ -287,6 +287,8 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
 function getToolState(entry: LogEntry): ToolUIPart["state"] {
   if (entry.toolResult !== undefined)
     return entry.toolSuccess ? "output-available" : "output-error";
+  if (entry.toolStage === "generating" || entry.toolStage === "queued")
+    return "input-streaming";
   if (entry.needsPermission && !entry.permissionResolved)
     return "approval-requested";
   return "input-available";
@@ -341,6 +343,11 @@ function ToolCallStep({
         </span>
         {awaitingApproval && (
           <span className={approvalBadgeClassName}>待审批</span>
+        )}
+        {state === "input-streaming" && (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {entry.toolStage === "queued" ? "排队中" : "生成参数"}
+          </span>
         )}
         {executing && <LoaderCircle className="size-3 shrink-0 animate-spin" />}
         {state === "output-available" && (

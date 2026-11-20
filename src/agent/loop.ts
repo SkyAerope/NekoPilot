@@ -13,6 +13,18 @@ import type {
   ToolCall,
 } from "./types";
 
+type EnqueueTool = (call: ToolCall) => void;
+
+function isCompleteToolCall(call: ToolCall): boolean {
+  if (!call.id || !call.function.name) return false;
+  try {
+    const args = JSON.parse(call.function.arguments);
+    return args !== null && typeof args === "object" && !Array.isArray(args);
+  } catch {
+    return false;
+  }
+}
+
 const SYSTEM_PROMPT = `你是 NekoPilot，一个浏览器自动化助手。
 你可以通过 tools 控制用户当前浏览器页面。
 
@@ -55,7 +67,7 @@ const SHORT_REFS_HINT = `
 export class AgentLoop {
   private messages: ChatMessage[] = [];
   private aborted = false;
-  private permissionResolve: ((approved: boolean) => void) | null = null;
+  private pendingPermission: { id: string; resolve: (approved: boolean) => void } | null = null;
   private httpAbortController: AbortController | null = null;
 
   constructor(
@@ -66,10 +78,7 @@ export class AgentLoop {
 
   abort(): void {
     this.aborted = true;
-    if (this.permissionResolve) {
-      this.permissionResolve(false);
-      this.permissionResolve = null;
-    }
+    this.resolvePermission(false);
     // 立即掐断 LLM HTTP 流
     if (this.httpAbortController) {
       try { this.httpAbortController.abort(); } catch { /* ignore */ }
@@ -77,20 +86,17 @@ export class AgentLoop {
     }
   }
 
-  resolvePermission(approved: boolean): void {
-    if (this.permissionResolve) {
-      this.permissionResolve(approved);
-      this.permissionResolve = null;
-    }
+  resolvePermission(approved: boolean, toolCallId?: string): void {
+    const pending = this.pendingPermission;
+    if (!pending || (toolCallId !== undefined && pending.id !== toolCallId)) return;
+    this.pendingPermission = null;
+    pending.resolve(approved);
   }
 
   /** 运行时切换权限模式；切到 auto 时会自动放行当前等待的审批 */
   setPermissionMode(mode: "ask" | "auto"): void {
     this.config.permissionMode = mode;
-    if (mode === "auto" && this.permissionResolve) {
-      this.permissionResolve(true);
-      this.permissionResolve = null;
-    }
+    if (mode === "auto") this.resolvePermission(true);
   }
 
   async run(history: ChatMessage[]): Promise<{ text: string; messages: ChatMessage[] }> {
@@ -123,7 +129,6 @@ export class AgentLoop {
     ];
 
     const finishWith = (text: string, eventType: "done" | "error" = "done") => {
-      this.finalizePendingToolUses();
       this.emit({ type: eventType, data: text });
       if (eventType === "error") this.emit({ type: "done", data: text });
       return { text, messages: this.messages.slice(1) };
@@ -139,94 +144,58 @@ export class AgentLoop {
         this.pruneOldScreenshots();
       }
 
-      let response: ChatMessage;
-      try {
-        response = await this.callLlm();
-      } catch (err) {
-        // 用户主动 abort：不要把 AbortError 当 LLM 错误透传
-        if (this.aborted) {
-          return finishWith("Agent was stopped.");
+      const startedCalls: ToolCall[] = [];
+      const results: ChatMessage[] = [];
+      const screenshots: ChatMessage[] = [];
+      const queuedIds = new Set<string>();
+      let queue = Promise.resolve();
+      let streamFailed = false;
+      const stopped = () => this.aborted || streamFailed;
+      const enqueue: EnqueueTool = (call) => {
+        if (!isCompleteToolCall(call) || queuedIds.has(call.id)) {
+          throw new Error("模型返回了不完整或重复的工具调用。");
         }
-        return finishWith(String(err), "error");
-      }
+        queuedIds.add(call.id);
+        this.emitToolProgress(call, "queued");
+        queue = queue.then(async () => {
+          if (stopped()) return;
+          startedCalls.push(call);
+          try {
+            await this.executeToolCall(call, results, screenshots, stopped);
+          } catch (err) {
+            this.recordToolFailure(call, `工具执行失败：${String(err)}`, results);
+          }
+        });
+      };
 
-      // 如果没有 tool_calls，说明 agent 回复了最终结果
-      if (!response.tool_calls || response.tool_calls.length === 0) {
-        const rawContent = response.content ?? "";
-        const text = typeof rawContent === "string" ? rawContent : rawContent.filter(p => p.type === "text").map(p => (p as { type: "text"; text: string }).text).join("");
+      let content: string | null = null;
+      let streamError: unknown;
+      try {
+        content = await this.callLlm(enqueue);
+      } catch (err) {
+        streamFailed = true;
+        streamError = err;
+        this.resolvePermission(false);
+      }
+      await queue;
+
+      // 流异常时也要保存已启动的调用及其结果，供后续对话使用。
+      if (startedCalls.length) {
+        this.messages.push(
+          { role: "assistant", content, tool_calls: startedCalls },
+          ...results,
+          ...screenshots,
+        );
+      }
+      if (this.aborted) return finishWith("Agent was stopped.");
+      if (streamFailed) return finishWith(String(streamError), "error");
+      if (!startedCalls.length) {
+        const text = content ?? "";
         this.messages.push({ role: "assistant", content: text });
         return finishWith(text);
       }
-
-      // 有 tool_calls，执行
-      this.messages.push(response);
-
-      const deferredMessages: ChatMessage[] = [];
-      for (const toolCall of response.tool_calls) {
-        if (this.aborted) break;
-        try {
-          await this.executeToolCall(toolCall, deferredMessages);
-        } catch (err) {
-          // 工具执行抛异常（执行器 bug、CDP 断开等）：补一条失败 tool_result
-          // 让 LLM 知道这次调用挂了，避免后续出现 tool_use 无对应 tool_result 的 400。
-          // 同时把错误抛到 UI，避免静默吞掉。
-          // eslint-disable-next-line no-console
-          console.error("[NekoPilot] executeToolCall threw:", toolCall.function?.name, err);
-          const failed = { success: false, error: `tool execution threw: ${String(err)}` };
-          this.emit({ type: "tool_result", data: { name: toolCall.function?.name ?? "unknown", result: failed, id: toolCall.id } });
-          this.emit({ type: "error", data: `工具 ${toolCall.function?.name} 执行抛错：${String(err)}` });
-          this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(failed) });
-        }
-      }
-      this.messages.push(...deferredMessages);
-
-      // 工具循环中被 abort：在退出前补齐缺失的 tool_result，然后结束
-      if (this.aborted) {
-        return finishWith("Agent was stopped.");
-      }
     }
   }
-
-  /**
-   * 扫描 messages 末尾的最后一条 assistant tool_calls，
-   * 给所有缺失对应 tool_result 的 tool_call 补一条占位结果，
-   * 否则下一轮 LLM 调用会因 tool_use/tool_result 不匹配报 400。
-   */
-  private finalizePendingToolUses(): void {
-    // 找到最后一条带 tool_calls 的 assistant
-    let asstIdx = -1;
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      const m = this.messages[i];
-      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-        asstIdx = i;
-        break;
-      }
-      // 跨越 tool/user 消息继续向前找
-      if (m.role === "assistant" && (!m.tool_calls || m.tool_calls.length === 0)) return;
-    }
-    if (asstIdx < 0) return;
-    const asst = this.messages[asstIdx];
-    const calls = asst.tool_calls!;
-    // 收集 asstIdx 之后已存在的 tool_result 对应的 id
-    const seen = new Set<string>();
-    for (let i = asstIdx + 1; i < this.messages.length; i++) {
-      const m = this.messages[i];
-      if (m.role === "tool" && m.tool_call_id) seen.add(m.tool_call_id);
-    }
-    // 找到第一个缺失 tool_result 的位置（按 calls 顺序），把缺失项补在 asst 后续的 tool 序列末尾
-    const missing = calls.filter((c) => !seen.has(c.id));
-    if (missing.length === 0) return;
-    // 找到 tool_result 序列结尾位置，将占位插入此处（保持顺序）
-    let insertAt = asstIdx + 1;
-    while (insertAt < this.messages.length && this.messages[insertAt].role === "tool") insertAt++;
-    const fillers: ChatMessage[] = missing.map((c) => ({
-      role: "tool",
-      tool_call_id: c.id,
-      content: JSON.stringify({ success: false, error: "用户停止了执行，工具未运行" }),
-    }));
-    this.messages.splice(insertAt, 0, ...fillers);
-  }
-
 
   /**
    * 截图滚动缓冲区（cache-aware）：存活截图数 > 触发阈值 m 时，
@@ -276,19 +245,23 @@ export class AgentLoop {
     }
   }
 
-  private async callLlm(): Promise<ChatMessage> {
+  private async callLlm(enqueue: EnqueueTool): Promise<string | null> {
     try {
       if (this.config.provider === "anthropic") {
-        return await this.callLlmAnthropic();
+        return await this.callLlmAnthropic(enqueue);
       }
-      return await this.callLlmOpenAI();
+      return await this.callLlmOpenAI(enqueue);
+    } catch (error) {
+      this.httpAbortController?.abort();
+      throw error;
     } finally {
+      this.httpAbortController = null;
       // 中止和读取异常也必须结束本轮 UI 的思考状态。
       this.emit({ type: "assistant_turn_done", data: "" });
     }
   }
 
-  private async callLlmOpenAI(): Promise<ChatMessage> {
+  private async callLlmOpenAI(enqueue: EnqueueTool): Promise<string | null> {
     const functions = this.getAvailableToolDefinitions().map(toOpenAiFunction);
 
     const body = {
@@ -319,11 +292,13 @@ export class AgentLoop {
 
     // 解析 SSE 流
     let content = "";
-    const toolCallsMap = new Map<number, { id: string; type: "function"; function: { name: string; arguments: string } }>();
-    let hasContent = false;
+    const toolCalls = new Map<number, ToolCall>();
+    let nextToolIndex = 0;
+    let highestToolIndex = -1;
+    let finishReason: string | undefined;
+    let receivedDone = false;
     // 追踪是否已经发过起始事件
     let messageStarted = false;
-    let toolCallStreamingStarted = false;
     // reasoning_content / reasoning：DeepSeek、Kimi、Fireworks 等供应商的"思考"通道，
     // 不会出现在最终 message.content 里，需要单独转发到 UI 的 thinking 事件。
     let reasoningStarted = false;
@@ -344,7 +319,10 @@ export class AgentLoop {
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
-        if (data === "[DONE]") continue;
+        if (data === "[DONE]") {
+          receivedDone = true;
+          continue;
+        }
 
         let chunk;
         try {
@@ -365,7 +343,10 @@ export class AgentLoop {
           });
         }
 
-        const delta = chunk.choices?.[0]?.delta;
+        if (chunk.error) throw new Error(chunk.error.message ?? "模型流返回错误。");
+        const choice = chunk.choices?.[0];
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        const delta = choice?.delta;
         if (!delta) continue;
 
         // reasoning_content（DeepSeek/Kimi/Fireworks）/ reasoning（部分供应商）：
@@ -386,7 +367,6 @@ export class AgentLoop {
         // 前端会检测到 <think> 标签后把该条目转为 thinking；无标签则视为普通 assistant 正文。
         if (delta.content) {
           content += delta.content;
-          hasContent = true;
 
           if (!messageStarted) {
             this.emit({ type: "message", data: "" });
@@ -395,37 +375,57 @@ export class AgentLoop {
           this.emit({ type: "message_delta", data: delta.content });
         }
 
-        // 累积 tool_calls
         if (delta.tool_calls) {
-          if (!toolCallStreamingStarted) {
-            this.emit({ type: "tool_call_streaming", data: "正在生成工具调用…" });
-            toolCallStreamingStarted = true;
-          }
           for (const tc of delta.tool_calls) {
             const idx = tc.index ?? 0;
-            if (!toolCallsMap.has(idx)) {
-              toolCallsMap.set(idx, {
-                id: tc.id ?? "",
-                type: "function",
-                function: { name: tc.function?.name ?? "", arguments: "" },
-              });
+            const call = toolCalls.get(idx) ?? {
+              id: "",
+              type: "function",
+              function: { name: "", arguments: "" },
+            };
+            const name = tc.function?.name;
+            const args = tc.function?.arguments ?? "";
+            if (idx < nextToolIndex) {
+              if (args.trim() || (tc.id && tc.id !== call.id) || (name && name !== call.function.name)) {
+                throw new Error(`模型修改了已入队的工具调用（索引 ${idx}）。`);
+              }
+              continue;
             }
-            const existing = toolCallsMap.get(idx)!;
-            if (tc.id) existing.id = tc.id;
-            if (tc.function?.name) existing.function.name = tc.function.name;
-            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+            if (call.id && tc.id && call.id !== tc.id) {
+              throw new Error(`模型修改了工具调用 ID（索引 ${idx}）。`);
+            }
+            if (tc.id) call.id = tc.id;
+            if (name) call.function.name = name;
+            call.function.arguments += args;
+            toolCalls.set(idx, call);
+            highestToolIndex = Math.max(highestToolIndex, idx);
+            this.emitToolProgress(call, "generating");
+          }
+          // 索引推进后，连续且已能解析的调用才能提前入队。
+          while (nextToolIndex < highestToolIndex && (!finishReason || finishReason === "tool_calls")) {
+            const call = toolCalls.get(nextToolIndex);
+            if (!call || !isCompleteToolCall(call)) break;
+            enqueue(call);
+            nextToolIndex++;
           }
         }
       }
     }
 
-    const toolCalls = Array.from(toolCallsMap.values()) as ToolCall[];
-
-    return {
-      role: "assistant",
-      content: hasContent ? content : null,
-      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-    } as ChatMessage;
+    if (toolCalls.size) {
+      if (finishReason !== "tool_calls" && (finishReason || !receivedDone)) {
+        throw new Error(`工具调用流提前结束（${finishReason ?? "连接中断"}）。`);
+      }
+      const remaining = [...toolCalls]
+        .filter(([index]) => index >= nextToolIndex)
+        .sort(([a], [b]) => a - b)
+        .map(([, call]) => call);
+      if (remaining.some((call) => !isCompleteToolCall(call))) {
+        throw new Error("模型返回了不完整的工具调用。");
+      }
+      for (const call of remaining) enqueue(call);
+    }
+    return content || null;
   }
 
   // ── Anthropic Messages API ──
@@ -535,7 +535,7 @@ export class AgentLoop {
     }
   }
 
-  private async callLlmAnthropic(): Promise<ChatMessage> {
+  private async callLlmAnthropic(enqueue: EnqueueTool): Promise<string | null> {
     const tools = this.getAvailableToolDefinitions().map(toAnthropicTool);
     const { system, messages } = this.convertMessagesForAnthropic(await materializeAttachments(await materializeScreenshots(this.messages)));
     if (this.aborted) throw new DOMException("Agent was stopped.", "AbortError");
@@ -579,21 +579,16 @@ export class AgentLoop {
 
     // 解析 Anthropic SSE 流
     let content = "";
-    const toolCalls: ToolCall[] = [];
-    let hasContent = false;
     let messageStarted = false;
-
-    // 当前正在构建的 content block
-    let currentBlockType = "";
-    let currentToolId = "";
-    let currentToolName = "";
-    let currentToolArgs = "";
+    const pendingTools = new Map<number, { call: ToolCall; initialInput: unknown }>();
+    let sawTool = false;
+    let messageStopped = false;
+    let stopReason: string | undefined;
     // Anthropic usage：message_start 给 input_tokens，message_delta 累计 output_tokens
     let inputTokens = 0;
     let outputTokens = 0;
     let cacheCreationInputTokens = 0;
     let cacheReadInputTokens = 0;
-    let toolCallStreamingStarted = false;
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
@@ -616,6 +611,9 @@ export class AgentLoop {
         let event;
         try { event = JSON.parse(data); } catch { continue; }
 
+        if (event.type === "error") throw new Error(event.error?.message ?? "模型流返回错误。");
+        if (event.type === "message_stop") messageStopped = true;
+
         if (event.type === "message_start") {
           const u = event.message?.usage;
           if (u) {
@@ -628,6 +626,7 @@ export class AgentLoop {
         }
 
         if (event.type === "message_delta") {
+          stopReason = event.delta?.stop_reason ?? stopReason;
           const u = event.usage;
           if (u && typeof u.output_tokens === "number") {
             outputTokens = u.output_tokens;
@@ -637,15 +636,15 @@ export class AgentLoop {
 
         if (event.type === "content_block_start") {
           const block = event.content_block;
-          currentBlockType = block.type;
           if (block.type === "tool_use") {
-            if (!toolCallStreamingStarted) {
-              this.emit({ type: "tool_call_streaming", data: "正在生成工具调用…" });
-              toolCallStreamingStarted = true;
-            }
-            currentToolId = block.id;
-            currentToolName = block.name;
-            currentToolArgs = "";
+            sawTool = true;
+            const call: ToolCall = {
+              id: block.id,
+              type: "function",
+              function: { name: block.name, arguments: "" },
+            };
+            pendingTools.set(event.index, { call, initialInput: block.input });
+            this.emitToolProgress(call, "generating");
           }
           continue;
         }
@@ -654,7 +653,6 @@ export class AgentLoop {
           const delta = event.delta;
           if (delta.type === "text_delta" && delta.text) {
             content += delta.text;
-            hasContent = true;
             // 统一发 message_delta，前端按 <think> 标签判别思考
             if (!messageStarted) {
               this.emit({ type: "message", data: "" });
@@ -662,21 +660,23 @@ export class AgentLoop {
             }
             this.emit({ type: "message_delta", data: delta.text });
           } else if (delta.type === "input_json_delta" && delta.partial_json) {
-            currentToolArgs += delta.partial_json;
+            const pending = pendingTools.get(event.index);
+            if (pending) {
+              pending.call.function.arguments += delta.partial_json;
+              this.emitToolProgress(pending.call, "generating");
+            }
           }
           continue;
         }
 
         if (event.type === "content_block_stop") {
-          if (currentBlockType === "tool_use") {
-            toolCalls.push({
-              id: currentToolId,
-              type: "function",
-              function: { name: currentToolName, arguments: currentToolArgs },
-            });
+          const pending = pendingTools.get(event.index);
+          if (pending) {
+            const { call, initialInput } = pending;
+            call.function.arguments ||= JSON.stringify(initialInput ?? {});
+            enqueue(call);
+            pendingTools.delete(event.index);
           }
-          currentBlockType = "";
-          continue;
         }
       }
     }
@@ -694,11 +694,10 @@ export class AgentLoop {
       });
     }
 
-    return {
-      role: "assistant",
-      content: hasContent ? content : null,
-      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-    } as ChatMessage;
+    if (sawTool && (!messageStopped || pendingTools.size || (stopReason && stopReason !== "tool_use"))) {
+      throw new Error(`工具调用流提前结束（${stopReason ?? "连接中断"}）。`);
+    }
+    return content || null;
   }
 
   private getAvailableToolDefinitions() {
@@ -715,21 +714,40 @@ export class AgentLoop {
     "find_element", "get_element_text", "get_element_rect", "wait", "hover",
   ]);
 
-  private async executeToolCall(toolCall: ToolCall, deferredMessages: ChatMessage[]): Promise<void> {
+  private emitToolProgress(call: ToolCall, stage: "generating" | "queued"): void {
+    if (!call.id || !call.function.name) return;
+    this.emit({
+      type: "tool_call_streaming",
+      data: { name: call.function.name, args: call.function.arguments, id: call.id, stage },
+    });
+  }
+
+  private recordToolFailure(call: ToolCall, error: string, results: ChatMessage[]): void {
+    const result = { success: false, error };
+    this.emit({ type: "tool_result", data: { name: call.function.name, result, id: call.id } });
+    results.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+  }
+
+  private async executeToolCall(
+    toolCall: ToolCall,
+    results: ChatMessage[],
+    deferredMessages: ChatMessage[],
+    stopped: () => boolean,
+  ): Promise<void> {
     const { name, arguments: argsStr } = toolCall.function;
-    const needsPermission = this.config.permissionMode === "ask" && !AgentLoop.READONLY_TOOLS.has(name);
+    const params: Record<string, unknown> = JSON.parse(argsStr);
+    const needsPermission = () =>
+      this.config.permissionMode === "ask" && !AgentLoop.READONLY_TOOLS.has(name);
 
     this.emit({
       type: "tool_call",
-      data: { name, args: argsStr, id: toolCall.id, needsPermission },
+      data: { name, args: argsStr, id: toolCall.id, needsPermission: false },
     });
 
     // click 使用 selector 时，先检查元素是否存在，不存在或选择器非法直接拒绝
     if (name === "click") {
-      let parsedArgs: { selector?: unknown } | null = null;
-      try { parsedArgs = JSON.parse(argsStr); } catch { /* 解析失败交给后续 */ }
-      if (parsedArgs && typeof parsedArgs.selector === "string") {
-        const sel = parsedArgs.selector;
+      if (typeof params.selector === "string") {
+        const sel = params.selector;
         let exists = false;
         let errMsg = "";
         try {
@@ -739,24 +757,19 @@ export class AgentLoop {
           errMsg = String(err);
         }
         if (!exists) {
-          const rejected = {
-            success: false,
-            error: errMsg ? `选择器无效: ${sel} (${errMsg})` : `元素未找到: ${sel}`,
-          };
-          this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });
-          this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(rejected) });
+          this.recordToolFailure(toolCall, errMsg ? `选择器无效: ${sel} (${errMsg})` : `元素未找到: ${sel}`, results);
           return;
         }
       }
     }
 
     // 在 ask 模式下，仅对非只读工具等待用户确认
-    if (needsPermission) {
+    if (!stopped() && needsPermission()) {
       // click / scroll 工具显示位置标记
       let showedMarker = false;
       if (this.config.showClickMarker) {
         try {
-          const args = JSON.parse(argsStr);
+          const args = params;
           if (name === "click") {
             const x = args.x as number | undefined;
             const y = args.y as number | undefined;
@@ -785,30 +798,33 @@ export class AgentLoop {
               showedMarker = true;
             }
           }
-        } catch { /* 解析失败忽略 */ }
+        } catch { /* 标记失败不影响授权 */ }
       }
 
-      const approved = await new Promise<boolean>((resolve) => {
-        this.permissionResolve = resolve;
-      });
+      let approved = !stopped();
+      if (approved && needsPermission()) {
+        approved = await new Promise<boolean>((resolve) => {
+          this.pendingPermission = { id: toolCall.id, resolve };
+          this.emit({
+            type: "tool_call",
+            data: { name, args: argsStr, id: toolCall.id, needsPermission: true },
+          });
+        });
+      }
 
       if (showedMarker) {
         await this.tools.removeClickMarker().catch(() => {});
       }
 
-      if (!approved) {
-        const rejected = { success: false, error: "用户拒绝了此操作" };
-        this.emit({ type: "tool_result", data: { name, result: rejected, id: toolCall.id } });
-        this.messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(rejected) });
+      if (!approved && !stopped()) {
+        this.recordToolFailure(toolCall, "用户拒绝了此操作", results);
         return;
       }
     }
 
-    let params: Record<string, unknown>;
-    try {
-      params = JSON.parse(argsStr);
-    } catch {
-      params = {};
+    if (stopped()) {
+      this.recordToolFailure(toolCall, "工具调用已取消。", results);
+      return;
     }
 
     const result = await this.tools.execute(name, params);
@@ -828,7 +844,7 @@ export class AgentLoop {
     if (name === "screenshot" && result.success) {
       if (!isScreenshotRef(result.data)) throw new TypeError("Invalid screenshot reference");
       // tool 消息只能是字符串，图片需通过 user 消息传入
-      this.messages.push({
+      results.push({
         role: "tool",
         tool_call_id: toolCall.id,
         content: "Screenshot captured successfully.",
@@ -842,10 +858,10 @@ export class AgentLoop {
         ],
       });
     } else {
-      this.messages.push({
+      results.push({
         role: "tool",
         tool_call_id: toolCall.id,
-        content: JSON.stringify(result.data ?? result.error),
+        content: JSON.stringify(result.data ?? result.error ?? null),
       });
     }
   }

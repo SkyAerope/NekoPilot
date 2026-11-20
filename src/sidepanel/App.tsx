@@ -262,11 +262,18 @@ export default function App() {
       }
 
       if (event.type === "done") {
+        setLogs((prev) =>
+          prev.map((log) =>
+            log.toolStage && log.toolResult === undefined
+              ? { ...log, toolStage: undefined, toolSuccess: false, toolResult: "工具调用已取消。" }
+              : log,
+          ),
+        );
         setRunning(false);
         return;
       }
 
-      if (event.type === "tool_call_streaming") {
+      if (event.type === "tool_call_streaming" && typeof event.data === "string") {
         setLogs((prev) => {
           if (prev[prev.length - 1]?.type === "pending") return prev;
           return [
@@ -412,25 +419,37 @@ export default function App() {
         return;
       }
 
-      if (event.type === "tool_call") {
+      if (event.type === "tool_call" || event.type === "tool_call_streaming") {
         const data = event.data as {
           name: string;
           args: string;
           id: string;
+          stage?: "generating" | "queued";
           needsPermission?: boolean;
         };
-        setLogs((prev) => [
-          ...prev.filter((log) => log.type !== "pending"),
-          {
-            id: ++logIdCounter,
-            type: "tool_call",
+        setLogs((prev) => {
+          const logs = prev.filter((log) => log.type !== "pending");
+          const index = logs.findLastIndex((log) =>
+            log.type === "tool_call" && log.toolCallId === data.id && log.toolResult === undefined,
+          );
+          const update = {
             content: data.args,
             toolName: data.name,
             toolCallId: data.id,
+            toolStage: data.stage ?? ("running" as const),
             needsPermission: data.needsPermission,
+          };
+          if (index !== -1) {
+            logs[index] = { ...logs[index], ...update };
+            return logs;
+          }
+          return [...logs, {
+            ...update,
+            id: ++logIdCounter,
+            type: "tool_call",
             timestamp: Date.now(),
-          },
-        ]);
+          }];
+        });
         return;
       }
 
@@ -442,7 +461,7 @@ export default function App() {
         };
         setLogs((prev) =>
           prev.map((log) => {
-            if (log.type === "tool_call" && log.toolCallId === data.id) {
+            if (log.type === "tool_call" && log.toolCallId === data.id && log.toolResult === undefined) {
               const resultData = data.result.data ?? data.result.error;
               // 字符串结果直接保留（避免 JSON.stringify 把 \n 转义为字面量）
               const formatted =
@@ -480,6 +499,7 @@ export default function App() {
               }
               return {
                 ...log,
+                toolStage: undefined,
                 toolResult: isScreenshotRef(data.result.data) ? "Screenshot captured successfully." : formatted,
                 toolSuccess: semanticSuccess,
                 screenshotData: shotInfo?.data,
@@ -932,7 +952,7 @@ export default function App() {
   }, [refreshTargetStatus, assetPins]);
 
   const handleApprove = useCallback((toolCallId: string) => {
-    sendMessage("agent:approve");
+    sendMessage("agent:approve", toolCallId);
     setLogs((prev) =>
       prev.map((log) =>
         log.toolCallId === toolCallId
@@ -943,7 +963,7 @@ export default function App() {
   }, []);
 
   const handleReject = useCallback((toolCallId: string) => {
-    sendMessage("agent:reject");
+    sendMessage("agent:reject", toolCallId);
     setLogs((prev) =>
       prev.map((log) =>
         log.toolCallId === toolCallId

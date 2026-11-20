@@ -498,11 +498,11 @@ async function handleMessage(message: { type: string; payload?: unknown }) {
       return { ok: true, remaining: conversationHistory.length };
     }
     case "agent:approve": {
-      agentLoop?.resolvePermission(true);
+      agentLoop?.resolvePermission(true, message.payload as string | undefined);
       return { ok: true };
     }
     case "agent:reject": {
-      agentLoop?.resolvePermission(false);
+      agentLoop?.resolvePermission(false, message.payload as string | undefined);
       return { ok: true };
     }
     case "agent:setMode": {

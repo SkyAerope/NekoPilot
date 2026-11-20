@@ -25,6 +25,7 @@ export interface LogEntry {
   timestamp: number;
   toolName?: string;
   toolCallId?: string;
+  toolStage?: "generating" | "queued" | "running";
   toolResult?: string;
   toolSuccess?: boolean;
   needsPermission?: boolean;
