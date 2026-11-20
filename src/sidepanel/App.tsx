@@ -121,7 +121,7 @@ export default function App() {
     read: number;
   } | null>(null);
   const logsScroll = useBottomScroll(logs);
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const { resumeFollowing } = logsScroll;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 恢复持久化的对话记录：侧边栏关闭再打开时，React state 会重置，
@@ -829,6 +829,7 @@ export default function App() {
         setPickedElements([]);
         setAttachments([]);
       } };
+      resumeFollowing();
       setLogs(prev => [...prev, {
         id: messageId, type: "user", content: text + (attachmentNames.length ? `\n[附件: ${attachmentNames.join(", ")}]` : ""),
         timestamp: Date.now(), attachments: uploaded, attachmentNames,
@@ -918,6 +919,7 @@ export default function App() {
     targetStatusError?.needsReload,
     picking,
     finishRun,
+    resumeFollowing,
   ]);
 
   const handleStop = useCallback(async () => {
@@ -1145,6 +1147,7 @@ export default function App() {
           targetTab: targetStatus?.target ?? undefined,
         };
         pendingSendRef.current = { id: replayedEntry.id, accepted: false, onAccepted: () => setEditingMessage(null) };
+        resumeFollowing();
         setLogs([...logs.slice(0, userIdx), replayedEntry]);
         setRunning(true);
         const response = await sendAgentStart({
@@ -1227,6 +1230,7 @@ export default function App() {
       picking,
       editingMessage,
       finishRun,
+      resumeFollowing,
     ],
   );
 
@@ -1330,156 +1334,235 @@ export default function App() {
         onKeyDownCapture={logsScroll.onKeyDownCapture}
         className="min-h-0 flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]"
       >
-        {turns.length === 0 && (
-          <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-            <Bot className="size-10 text-primary/60" />
-            <p className="font-medium text-foreground">
-              有什么需要我帮你操作的？
-            </p>
-            <p className="max-w-64 text-xs leading-relaxed">
-              输入任务，或选择网页元素作为上下文。
-              <br />
-              询问模式下，操作执行前会等待你的批准。
-            </p>
-          </div>
-        )}
-        {turns.map((turn) => {
-          if (turn.kind === "user") {
-            const entry = turn.segment.entry;
-            const attachmentSuffix = entry.content.match(/\n\[附件: (.*?)\]$/s);
-            const attachmentNames =
-              entry.attachmentNames ?? attachmentSuffix?.[1].split(", ") ?? [];
-            const messageText = attachmentSuffix
-              ? entry.content.slice(0, attachmentSuffix.index)
-              : entry.content;
-            const isEditing = editingMessage?.id === entry.id;
-            return (
-              <Message from="user" key={entry.id} className="mb-5 max-w-full">
-                {isEditing ? (
-                  <MessageContent className="w-full border">
-                    <Textarea
-                      autoFocus
-                      aria-label="编辑消息内容"
-                      value={editingMessage.text}
-                      disabled={running}
-                      className="max-h-64 min-h-20 resize-none bg-white text-sm text-zinc-900 dark:bg-input/30 dark:text-foreground"
-                      onChange={(event) =>
-                        setEditingMessage({
-                          id: entry.id,
-                          text: event.target.value,
-                        })
-                      }
-                      onKeyDown={(event) => {
-                        if (event.nativeEvent.isComposing || running) return;
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          setEditingMessage(null);
-                        } else if (
-                          event.key === "Enter" &&
-                          (event.ctrlKey || event.metaKey)
-                        ) {
-                          event.preventDefault();
-                          void handleRetry(entry.id, true, editingMessage.text);
-                        }
-                      }}
-                    />
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        disabled={running}
-                        onClick={() => setEditingMessage(null)}
-                      >
-                        取消
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={
-                          running ||
-                          switchingTab ||
-                          picking ||
-                          targetStatus?.busy ||
-                          targetStatusError?.needsReload ||
-                           (!editingMessage.text.trim() &&
-                             !entry.pickedElements?.length &&
-                             !entry.attachments?.length)
-                        }
-                        onClick={() =>
-                          void handleRetry(entry.id, true, editingMessage.text)
-                        }
-                      >
-                        保存并重新发送
-                      </Button>
-                    </div>
-                  </MessageContent>
-                ) : (
-                  messageText && (
+        <div ref={logsScroll.contentRef} className="flow-root">
+          {turns.length === 0 && (
+            <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+              <Bot className="size-10 text-primary/60" />
+              <p className="font-medium text-foreground">
+                有什么需要我帮你操作的？
+              </p>
+              <p className="max-w-64 text-xs leading-relaxed">
+                输入任务，或选择网页元素作为上下文。
+                <br />
+                询问模式下，操作执行前会等待你的批准。
+              </p>
+            </div>
+          )}
+          {turns.map((turn) => {
+            if (turn.kind === "user") {
+              const entry = turn.segment.entry;
+              const attachmentSuffix = entry.content.match(/\n\[附件: (.*?)\]$/s);
+              const attachmentNames =
+                entry.attachmentNames ?? attachmentSuffix?.[1].split(", ") ?? [];
+              const messageText = attachmentSuffix
+                ? entry.content.slice(0, attachmentSuffix.index)
+                : entry.content;
+              const isEditing = editingMessage?.id === entry.id;
+              return (
+                <Message from="user" key={entry.id} className="mb-5 max-w-full">
+                  {isEditing ? (
                     <MessageContent className="w-full border">
-                      <p className="whitespace-pre-wrap break-words">
-                        {messageText}
-                      </p>
+                      <Textarea
+                        autoFocus
+                        aria-label="编辑消息内容"
+                        value={editingMessage.text}
+                        disabled={running}
+                        className="max-h-64 min-h-20 resize-none bg-white text-sm text-zinc-900 dark:bg-input/30 dark:text-foreground"
+                        onChange={(event) =>
+                          setEditingMessage({
+                            id: entry.id,
+                            text: event.target.value,
+                          })
+                        }
+                        onKeyDown={(event) => {
+                          if (event.nativeEvent.isComposing || running) return;
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            setEditingMessage(null);
+                          } else if (
+                            event.key === "Enter" &&
+                            (event.ctrlKey || event.metaKey)
+                          ) {
+                            event.preventDefault();
+                            void handleRetry(entry.id, true, editingMessage.text);
+                          }
+                        }}
+                      />
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={running}
+                          onClick={() => setEditingMessage(null)}
+                        >
+                          取消
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={
+                            running ||
+                            switchingTab ||
+                            picking ||
+                            targetStatus?.busy ||
+                            targetStatusError?.needsReload ||
+                             (!editingMessage.text.trim() &&
+                               !entry.pickedElements?.length &&
+                               !entry.attachments?.length)
+                          }
+                          onClick={() =>
+                            void handleRetry(entry.id, true, editingMessage.text)
+                          }
+                        >
+                          保存并重新发送
+                        </Button>
+                      </div>
                     </MessageContent>
-                  )
-                )}
-                {entry.targetTab && targetChipIds.has(entry.id) && (
-                  <div
-                    data-slot="message-target-tab"
-                    className="flex max-w-full self-end"
-                  >
-                    <ReferenceChip
-                      label={entry.targetTab.title}
-                      icon={<TabIcon tab={entry.targetTab} />}
-                    />
-                  </div>
-                )}
-                {!!entry.pickedElements?.length && (
-                  <div
-                    data-slot="message-picked-elements"
-                    className="flex max-w-full flex-wrap justify-end gap-1 self-end"
-                  >
-                    {entry.pickedElements.map((element) => (
+                  ) : (
+                    messageText && (
+                      <MessageContent className="w-full border">
+                        <p className="whitespace-pre-wrap break-words">
+                          {messageText}
+                        </p>
+                      </MessageContent>
+                    )
+                  )}
+                  {entry.targetTab && targetChipIds.has(entry.id) && (
+                    <div
+                      data-slot="message-target-tab"
+                      className="flex max-w-full self-end"
+                    >
                       <ReferenceChip
-                        key={element.id}
-                        label={`<${element.tag}> ${element.text || element.selector}`}
+                        label={entry.targetTab.title}
+                        icon={<TabIcon tab={entry.targetTab} />}
                       />
-                    ))}
-                  </div>
-                )}
-                {!!attachmentNames.length && (
-                  <div
-                    data-slot="message-attachments"
-                    className="flex max-w-full flex-wrap justify-end gap-1 self-end"
-                  >
-                    {attachmentNames.map((name, index) => (
-                      <ReferenceChip
-                        key={index}
-                        label={name}
-                        icon={<Paperclip className="size-3 shrink-0" />}
+                    </div>
+                  )}
+                  {!!entry.pickedElements?.length && (
+                    <div
+                      data-slot="message-picked-elements"
+                      className="flex max-w-full flex-wrap justify-end gap-1 self-end"
+                    >
+                      {entry.pickedElements.map((element) => (
+                        <ReferenceChip
+                          key={element.id}
+                          label={`<${element.tag}> ${element.text || element.selector}`}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {!!attachmentNames.length && (
+                    <div
+                      data-slot="message-attachments"
+                      className="flex max-w-full flex-wrap justify-end gap-1 self-end"
+                    >
+                      {attachmentNames.map((name, index) => (
+                        <ReferenceChip
+                          key={index}
+                          label={name}
+                          icon={<Paperclip className="size-3 shrink-0" />}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {!isEditing && (
+                    <MessageActions className="self-end">
+                      <MessageAction
+                        tooltip="复制"
+                        onClick={() => handleCopyText(entry.content)}
+                      >
+                        <Copy />
+                      </MessageAction>
+                      <MessageAction
+                        tooltip="编辑"
+                        disabled={running}
+                        onClick={() => handleEditMessage(entry.id)}
+                      >
+                        <Pencil />
+                      </MessageAction>
+                      <MessageAction
+                        tooltip="重试"
+                        disabled={running || editingMessage !== null}
+                        onClick={() => handleRetry(entry.id, true)}
+                      >
+                        <RotateCcw />
+                      </MessageAction>
+                    </MessageActions>
+                  )}
+                </Message>
+              );
+            }
+            const isLast = turn === turns[turns.length - 1];
+            const isComplete = !isLast || !running;
+            const allText = turn.segments
+              .map((segment) => {
+                if (segment.kind === "assistant") return segment.entry.content;
+                if (segment.kind === "steps")
+                  return segment.entries
+                    .filter((entry) => entry.type === "tool_call")
+                    .map(
+                      (entry) =>
+                        `${getToolLabel(entry.toolName)}: ${entry.toolResult ?? "..."}`,
+                    )
+                    .join("\n");
+                return "";
+              })
+              .filter(Boolean)
+              .join("\n\n");
+            return (
+              <Message
+                from="assistant"
+                key={turn.firstId}
+                className="mb-6 max-w-full"
+              >
+                <MessageContent className="w-full">
+                  {turn.segments.map((segment, index) => {
+                    if (segment.kind === "assistant")
+                      return (
+                        <MarkdownMessage
+                          key={segment.entry.id}
+                          content={segment.entry.content}
+                          streaming={!isComplete}
+                        />
+                      );
+                    if (segment.kind !== "steps") return null;
+                    const groupKey = segment.entries[0].id;
+                    const lastEntry = segment.entries[segment.entries.length - 1];
+                    const showPending =
+                      isLast &&
+                      running &&
+                      index === turn.segments.length - 1 &&
+                      ((lastEntry.type === "tool_call" &&
+                        lastEntry.toolResult !== undefined) ||
+                        (lastEntry.type === "thinking" &&
+                          lastEntry.thinkingDone === true));
+                    return (
+                      <StepsGroup
+                        key={groupKey}
+                        entries={segment.entries}
+                        expanded={expandedGroupKeys.has(groupKey)}
+                        onToggle={() => toggleGroup(groupKey)}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                        onDismiss={handleDismissLog}
+                        pending={showPending}
                       />
-                    ))}
-                  </div>
-                )}
-                {!isEditing && (
-                  <MessageActions className="self-end">
+                    );
+                  })}
+                </MessageContent>
+                {isComplete && (
+                  <MessageActions>
                     <MessageAction
                       tooltip="复制"
-                      onClick={() => handleCopyText(entry.content)}
+                      onClick={() => handleCopyText(allText)}
                     >
                       <Copy />
                     </MessageAction>
                     <MessageAction
-                      tooltip="编辑"
-                      disabled={running}
-                      onClick={() => handleEditMessage(entry.id)}
-                    >
-                      <Pencil />
-                    </MessageAction>
-                    <MessageAction
                       tooltip="重试"
                       disabled={running || editingMessage !== null}
-                      onClick={() => handleRetry(entry.id, true)}
+                      onClick={() => handleRetry(turn.firstId, false)}
                     >
                       <RotateCcw />
                     </MessageAction>
@@ -1487,91 +1570,13 @@ export default function App() {
                 )}
               </Message>
             );
-          }
-          const isLast = turn === turns[turns.length - 1];
-          const isComplete = !isLast || !running;
-          const allText = turn.segments
-            .map((segment) => {
-              if (segment.kind === "assistant") return segment.entry.content;
-              if (segment.kind === "steps")
-                return segment.entries
-                  .filter((entry) => entry.type === "tool_call")
-                  .map(
-                    (entry) =>
-                      `${getToolLabel(entry.toolName)}: ${entry.toolResult ?? "..."}`,
-                  )
-                  .join("\n");
-              return "";
-            })
-            .filter(Boolean)
-            .join("\n\n");
-          return (
-            <Message
-              from="assistant"
-              key={turn.firstId}
-              className="mb-6 max-w-full"
-            >
-              <MessageContent className="w-full">
-                {turn.segments.map((segment, index) => {
-                  if (segment.kind === "assistant")
-                    return (
-                      <MarkdownMessage
-                        key={segment.entry.id}
-                        content={segment.entry.content}
-                        streaming={!isComplete}
-                      />
-                    );
-                  if (segment.kind !== "steps") return null;
-                  const groupKey = segment.entries[0].id;
-                  const lastEntry = segment.entries[segment.entries.length - 1];
-                  const showPending =
-                    isLast &&
-                    running &&
-                    index === turn.segments.length - 1 &&
-                    ((lastEntry.type === "tool_call" &&
-                      lastEntry.toolResult !== undefined) ||
-                      (lastEntry.type === "thinking" &&
-                        lastEntry.thinkingDone === true));
-                  return (
-                    <StepsGroup
-                      key={groupKey}
-                      entries={segment.entries}
-                      expanded={expandedGroupKeys.has(groupKey)}
-                      onToggle={() => toggleGroup(groupKey)}
-                      onApprove={handleApprove}
-                      onReject={handleReject}
-                      onDismiss={handleDismissLog}
-                      pending={showPending}
-                    />
-                  );
-                })}
-              </MessageContent>
-              {isComplete && (
-                <MessageActions>
-                  <MessageAction
-                    tooltip="复制"
-                    onClick={() => handleCopyText(allText)}
-                  >
-                    <Copy />
-                  </MessageAction>
-                  <MessageAction
-                    tooltip="重试"
-                    disabled={running || editingMessage !== null}
-                    onClick={() => handleRetry(turn.firstId, false)}
-                  >
-                    <RotateCcw />
-                  </MessageAction>
-                </MessageActions>
-              )}
-            </Message>
-          );
-        })}
-        {running &&
-          (segments.length === 0 ||
-            segments[segments.length - 1].kind === "user") && (
-            <WorkingIndicator />
-          )}
-        <div ref={logsEndRef} />
+          })}
+          {running &&
+            (segments.length === 0 ||
+              segments[segments.length - 1].kind === "user") && (
+              <WorkingIndicator />
+            )}
+        </div>
       </div>
       <footer className="shrink-0 space-y-2 px-3 pb-3">
         <PromptInput

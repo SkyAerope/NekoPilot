@@ -1,6 +1,6 @@
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useRef,
   type UIEvent,
   type WheelEvent,
@@ -8,25 +8,48 @@ import {
 
 export function useBottomScroll(content: unknown, enabled = true) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
   const canResumeRef = useRef(true);
   const previousTopRef = useRef(0);
+  const previousBottomRef = useRef(0);
+
+  const scrollToBottom = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element || !followingRef.current) return;
+    const bottom = element.scrollHeight - element.clientHeight;
+    if (bottom - element.scrollTop > 1) element.scrollTop = bottom;
+    previousTopRef.current = element.scrollTop;
+    previousBottomRef.current = bottom;
+  }, []);
+
+  const resumeFollowing = useCallback(() => {
+    followingRef.current = true;
+    canResumeRef.current = true;
+  }, []);
 
   const onScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     // 嵌套思考框的滚动不应改变外层聊天区的跟随状态。
     if (event.target !== event.currentTarget) return;
     const element = event.currentTarget;
     const top = element.scrollTop;
-    if (top < previousTopRef.current) {
+    const bottom = element.scrollHeight - element.clientHeight;
+    // 内容或视口缩放也会降低 scrollTop，此时由尺寸观察器重新贴底。
+    if (
+      top < previousTopRef.current &&
+      bottom === previousBottomRef.current &&
+      bottom - top > 1
+    ) {
       followingRef.current = false;
     } else if (
       top > previousTopRef.current &&
       canResumeRef.current &&
-      element.scrollHeight - element.clientHeight - top <= 1
+      bottom - top <= 1
     ) {
       followingRef.current = true;
     }
     previousTopRef.current = top;
+    previousBottomRef.current = bottom;
   }, []);
 
   const onWheelCapture = useCallback((event: WheelEvent<HTMLDivElement>) => {
@@ -61,19 +84,24 @@ export function useBottomScroll(content: unknown, enabled = true) {
     canResumeRef.current = true;
   }, []);
 
-  useEffect(() => {
-    if (!enabled || !followingRef.current) return;
-    const frame = requestAnimationFrame(() => {
-      const element = scrollRef.current;
-      if (!element || !followingRef.current) return;
-      element.scrollTop = element.scrollHeight;
-      previousTopRef.current = element.scrollTop;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [content, enabled]);
+  useLayoutEffect(() => {
+    if (enabled) scrollToBottom();
+  }, [content, enabled, scrollToBottom]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const contentElement = contentRef.current;
+    if (!enabled || !scroller || !contentElement) return;
+    const observer = new ResizeObserver(scrollToBottom);
+    observer.observe(scroller);
+    observer.observe(contentElement);
+    return () => observer.disconnect();
+  }, [enabled, scrollToBottom]);
 
   return {
     scrollRef,
+    contentRef,
+    resumeFollowing,
     onScroll,
     onWheelCapture,
     onPointerDownCapture: allowScrollResume,

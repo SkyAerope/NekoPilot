@@ -720,6 +720,56 @@ test("长对话仅在聊天区滚动，整页不会出现底部空白", async ({
   ).toBeInViewport();
 });
 
+test("上滚后发送会恢复贴底，并跟随没有新日志的布局变化", async ({ page }) => {
+  await installHarness(page, {
+    chatLogs: Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      type: "user",
+      content: `历史消息 ${index + 1}`,
+      timestamp: index + 1,
+    })),
+    deferResponses: ["agent:start"],
+  });
+  await page.goto("/sidepanel.html");
+  await expect(page.getByText("历史消息 20", { exact: true })).toBeInViewport();
+
+  const chat = page.locator("#root > div > div");
+  const lastMessage = page.getByText("本轮消息", { exact: true });
+  const distanceToBottom = () =>
+    chat.evaluate(
+      (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+    );
+  await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+  await chat.hover();
+  await page.mouse.wheel(0, -500);
+  await expect.poll(distanceToBottom).toBeGreaterThan(100);
+
+  await page.getByRole("textbox", { name: "任务内容" }).fill("本轮消息");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(lastMessage).toBeInViewport();
+  await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+
+  // 先让视口变高触发 scrollTop 回退，再变矮，验证跟随状态仍然有效。
+  await page.setViewportSize({ width: 360, height: 900 });
+  await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+  await page.setViewportSize({ width: 360, height: 600 });
+  await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+
+  // 模拟截图展开等消息内部的高度变化，此时日志没有更新。
+  await lastMessage.evaluate((element) => {
+    element.style.paddingBottom = "120px";
+  });
+  await expect.poll(distanceToBottom).toBeLessThanOrEqual(1);
+
+  await chat.hover();
+  await page.mouse.wheel(0, -500);
+  await expect.poll(distanceToBottom).toBeGreaterThan(100);
+  await lastMessage.evaluate((element) => {
+    element.style.paddingBottom = "180px";
+  });
+  await expect.poll(distanceToBottom).toBeGreaterThan(100);
+});
+
 for (const mode of ["正文", "思考", "思考框"] as const) {
   test(`${mode}流式输出时一次向上滚轮即可暂停跟随，回到底部后恢复`, async ({
     page,

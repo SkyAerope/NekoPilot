@@ -277,7 +277,9 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
           onKeyDownCapture={thinkingScroll.onKeyDownCapture}
           className="max-h-50 overflow-y-auto rounded-md border px-3 py-3 text-muted-foreground"
         >
-          <MarkdownMessage content={content} streaming={!done} />
+          <div ref={thinkingScroll.contentRef}>
+            <MarkdownMessage content={content} streaming={!done} />
+          </div>
         </div>
       </CollapsibleContent>
     </Reasoning>
