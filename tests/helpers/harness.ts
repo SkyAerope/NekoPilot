@@ -9,6 +9,7 @@ type Harness = {
   notifyTargetChanged: () => void;
   emitTabEvent: (type: string) => void;
   statusDelay?: number;
+  deferredResponses: Record<string, (result: unknown) => void>;
   bindTarget: (
     messageId: number,
     target: TargetTab,
@@ -45,6 +46,7 @@ export async function installHarness(
       },
       ...initialStorage,
     };
+    const deferResponses = new Set(initialStorage.deferResponses as string[] | undefined);
     const messageListeners = new Set<(message: unknown, sender: object, respond: (response: unknown) => void) => void>();
     const storageListeners = new Set<(changes: unknown) => void>();
     const messages: Harness["messages"] = [];
@@ -66,6 +68,7 @@ export async function installHarness(
     const harness: Harness = {
       storage,
       messages,
+      deferredResponses: {},
       statusError: initialStorage.statusError as string | undefined,
       reloadCount: 0,
       followingActive: initialStorage.followingActive === true,
@@ -187,7 +190,9 @@ export async function installHarness(
                           },
                         }
                       : {};
-          if (message.type === "target:status" && harness.statusDelay) {
+          if (deferResponses.has(message.type)) {
+            harness.deferredResponses[message.type] = callback;
+          } else if (message.type === "target:status" && harness.statusDelay) {
             const snapshot = structuredClone(result);
             window.setTimeout(() => callback(snapshot), harness.statusDelay);
           } else if (

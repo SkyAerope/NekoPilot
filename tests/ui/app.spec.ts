@@ -1213,6 +1213,70 @@ test("表格全屏时表格本体保持圆角，退出后恢复行内卡片", as
   await expect(page.getByRole("table")).toBeVisible();
 });
 
+test("重试回滚期间旧回复保持完成状态", async ({ page }) => {
+  await installHarness(page, {
+    deferResponses: ["agent:truncateBeforeUserTurn"],
+    chatLogs: [
+      { id: 1, type: "user", content: "检查页面", timestamp: 1 },
+      {
+        id: 2,
+        type: "thinking",
+        content: "旧回复的思考",
+        thinkingDone: true,
+        thinkSeconds: 1,
+        timestamp: 2,
+      },
+    ],
+  });
+  await page.goto("/sidepanel.html");
+  const oldReply = page.locator(".is-assistant");
+  await oldReply.getByRole("button", { name: "重试", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(window.__harness.deferredResponses["agent:truncateBeforeUserTurn"]),
+      ),
+    )
+    .toBe(true);
+  await expect(oldReply.getByRole("button", { name: /思考/ })).toBeVisible();
+  await expect(oldReply.getByText("正在工作…", { exact: true })).toHaveCount(0);
+  await page.evaluate(() =>
+    window.__harness.deferredResponses["agent:truncateBeforeUserTurn"]({}),
+  );
+  await expect(oldReply).toHaveCount(0);
+  await expect(page.getByText("正在工作…", { exact: true })).toBeVisible();
+});
+
+test("后台返回结果时收尾，即使没有收到 done 事件", async ({ page }) => {
+  await installHarness(page, { deferResponses: ["agent:start"] });
+  await page.goto("/sidepanel.html");
+  await page.getByRole("textbox", { name: "任务内容" }).fill("检查页面");
+  const send = page.getByRole("button", { name: "发送消息", exact: true });
+  await send.click();
+  await expect(page.getByText("正在工作…", { exact: true })).toBeVisible();
+  await page.evaluate(() =>
+    window.__harness.deferredResponses["agent:start"]({ result: "" }),
+  );
+  await expect(send).toBeVisible();
+  await expect(page.getByText("正在工作…", { exact: true })).toHaveCount(0);
+});
+
+test("恢复对话时清理旧版正在工作占位", async ({ page }) => {
+  await installHarness(page, {
+    chatLogs: [
+      { id: 1, type: "user", content: "检查页面", timestamp: 1 },
+      { id: 2, type: "assistant", content: "检查完成", timestamp: 2 },
+      { id: 3, type: "pending", content: "生成工具调用", timestamp: 3 },
+    ],
+  });
+  await page.goto("/sidepanel.html");
+  await expect(page.getByText("检查完成", { exact: true })).toBeVisible();
+  await expect(page.getByText("正在工作…", { exact: true })).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => window.__harness.storage.chatLogs))
+    .toMatchObject([{ id: 1 }, { id: 2 }]);
+});
+
 test("流式思考、步骤分组和手动折叠", async ({ page }) => {
   await installHarness(page);
   await page.goto("/sidepanel.html");

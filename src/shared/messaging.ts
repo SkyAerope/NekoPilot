@@ -10,7 +10,9 @@ export type AgentStartPayload = {
   readonly retryTurnIndex?: number;
 };
 
-export function sendAgentStart(payload: AgentStartPayload): Promise<unknown> {
+export function sendAgentStart(
+  payload: AgentStartPayload,
+): Promise<{ result: string }> {
   return sendMessage("agent:start", payload);
 }
 

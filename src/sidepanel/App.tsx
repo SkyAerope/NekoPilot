@@ -130,6 +130,26 @@ export default function App() {
   const logsLoadedRef = useRef(false);
   const logsGenerationRef = useRef(0);
   const [assetPins] = useState(() => new AssetPins());
+  const finishRun = useCallback(() => {
+    setLogs((previous) => {
+      const entries = finishThinking(previous);
+      const hasUnfinishedTool = entries.some(
+        (entry) => entry.toolStage && entry.toolResult === undefined,
+      );
+      if (!hasUnfinishedTool) return entries;
+      return entries.map((entry) =>
+        entry.toolStage && entry.toolResult === undefined
+          ? {
+              ...entry,
+              toolStage: undefined,
+              toolSuccess: false,
+              toolResult: "工具调用已取消。",
+            }
+          : entry,
+      );
+    });
+    setRunning(false);
+  }, []);
 
   // 加载持久化设置 + 历史对话
   useEffect(() => {
@@ -142,7 +162,9 @@ export default function App() {
         if (data.settings?.elementTextLimit != null)
           setElementTextLimit(data.settings.elementTextLimit);
         if (Array.isArray(data.chatLogs) && data.chatLogs.length > 0) {
-          const restored = data.chatLogs as LogEntry[];
+          const restored = (data.chatLogs as LogEntry[]).filter(
+            (entry) => entry.type !== "pending",
+          );
           // 迁移可能异步等待；新消息创建前先恢复计数器。
           logIdCounter = restored.reduce((maximum, entry) => Math.max(maximum, entry.id), logIdCounter);
           try {
@@ -254,7 +276,6 @@ export default function App() {
           "tool_call_streaming",
           "tool_call",
           "thinking",
-          "done",
           "error",
         ].includes(event.type)
       ) {
@@ -262,39 +283,17 @@ export default function App() {
       }
 
       if (event.type === "done") {
-        setLogs((prev) =>
-          prev.map((log) =>
-            log.toolStage && log.toolResult === undefined
-              ? { ...log, toolStage: undefined, toolSuccess: false, toolResult: "工具调用已取消。" }
-              : log,
-          ),
-        );
-        setRunning(false);
+        finishRun();
         return;
       }
 
       if (event.type === "tool_call_streaming" && typeof event.data === "string") {
-        setLogs((prev) => {
-          if (prev[prev.length - 1]?.type === "pending") return prev;
-          return [
-            ...prev,
-            {
-              id: ++logIdCounter,
-              type: "pending",
-              content:
-                typeof event.data === "string"
-                  ? event.data
-                  : "正在生成工具调用…",
-              timestamp: Date.now(),
-            },
-          ];
-        });
         return;
       }
 
       if (event.type === "message") {
         setLogs((prev) => [
-          ...prev.filter((log) => log.type !== "pending"),
+          ...prev,
           {
             id: ++logIdCounter,
             type: "assistant",
@@ -428,7 +427,7 @@ export default function App() {
           needsPermission?: boolean;
         };
         setLogs((prev) => {
-          const logs = prev.filter((log) => log.type !== "pending");
+          const logs = [...prev];
           const index = logs.findLastIndex((log) =>
             log.type === "tool_call" && log.toolCallId === data.id && log.toolResult === undefined,
           );
@@ -643,7 +642,7 @@ export default function App() {
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, []);
+  }, [assetPins, finishRun]);
 
   const hasMessages = logs.some(
     (log) => log.type === "user" || log.type === "assistant",
@@ -838,7 +837,7 @@ export default function App() {
       }]);
       setPreparingAttachments(false);
       setRunning(true);
-      await sendAgentStart({
+      const response = await sendAgentStart({
         messageId,
         userMessage: fullMessage,
         attachments: uploaded,
@@ -887,6 +886,7 @@ export default function App() {
           enablePromptCaching: settings.enablePromptCaching === true,
         },
       });
+      if (typeof response?.result === "string") finishRun();
     } catch (err) {
       if (!pendingSendRef.current?.accepted) setLogs(prev => prev.filter(entry => entry.id !== messageId));
       setLogs((prev) => [
@@ -898,7 +898,7 @@ export default function App() {
           timestamp: Date.now(),
         },
       ]);
-      setRunning(false);
+      finishRun();
     } finally {
       submittingRef.current = false;
       pendingSendRef.current = null;
@@ -917,6 +917,7 @@ export default function App() {
     targetStatus?.target,
     targetStatusError?.needsReload,
     picking,
+    finishRun,
   ]);
 
   const handleStop = useCallback(async () => {
@@ -1086,7 +1087,6 @@ export default function App() {
       )
         return;
       submittingRef.current = true;
-      setRunning(true);
       try {
         // 计算这是第几个 user 消息（用于 background 侧的对话历史回滚）
         let turnIndex = 0;
@@ -1129,7 +1129,6 @@ export default function App() {
               timestamp: Date.now(),
             },
           ]);
-          setRunning(false);
           return;
         }
         // 确认提交后才回滚历史，编辑草稿和取消操作不影响对话。
@@ -1147,7 +1146,8 @@ export default function App() {
         };
         pendingSendRef.current = { id: replayedEntry.id, accepted: false, onAccepted: () => setEditingMessage(null) };
         setLogs([...logs.slice(0, userIdx), replayedEntry]);
-        await sendAgentStart({
+        setRunning(true);
+        const response = await sendAgentStart({
           messageId: replayedEntry.id,
           userMessage: fullMessage,
           attachments: userEntry.attachments,
@@ -1198,6 +1198,7 @@ export default function App() {
             enablePromptCaching: settings.enablePromptCaching === true,
           },
         });
+        if (typeof response?.result === "string") finishRun();
       } catch (err) {
         if (pendingSendRef.current && !pendingSendRef.current.accepted) setLogs(logs);
         setLogs((prev) => [
@@ -1209,7 +1210,7 @@ export default function App() {
             timestamp: Date.now(),
           },
         ]);
-        setRunning(false);
+        finishRun();
       } finally {
         submittingRef.current = false;
         pendingSendRef.current = null;
@@ -1225,6 +1226,7 @@ export default function App() {
       targetStatusError?.needsReload,
       picking,
       editingMessage,
+      finishRun,
     ],
   );
 
