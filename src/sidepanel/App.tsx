@@ -39,6 +39,7 @@ import {
   PromptInputTools,
   PromptInputButton,
   PromptInputSubmit,
+  usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "./markdown";
@@ -73,6 +74,24 @@ function getErrorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(
     /^(?:Error:\s*)+/,
     "",
+  );
+}
+
+function AttachFilesButton({ disabled }: { disabled: boolean }) {
+  const { openFileDialog } = usePromptInputAttachments();
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <PromptInputButton
+          aria-label="添加附件"
+          disabled={disabled}
+          onClick={openFileDialog}
+        >
+          <Paperclip />
+        </PromptInputButton>
+      </TooltipTrigger>
+      <TooltipContent>添加附件</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -122,7 +141,6 @@ export default function App() {
   } | null>(null);
   const logsScroll = useBottomScroll(logs);
   const { resumeFollowing } = logsScroll;
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 恢复持久化的对话记录：侧边栏关闭再打开时，React state 会重置，
   // 但 background 仍保留 conversationHistory，会导致"UI 清空但请求仍带历史"。
@@ -1253,16 +1271,6 @@ export default function App() {
     setAttachments((previous) => [...previous, ...newAttachments]);
   }, [attachments, running]);
 
-  const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (!files) return;
-      handleAddFiles(Array.from(files));
-      e.target.value = "";
-    },
-    [handleAddFiles],
-  );
-
   const segments = useMemo(() => groupLogs(logs), [logs]);
   const turns = useMemo(() => groupIntoTurns(segments), [segments]);
   const targetChipIds = useMemo(() => {
@@ -1744,18 +1752,7 @@ export default function App() {
                     : "选择页面元素"}
                 </TooltipContent>
               </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PromptInputButton
-                    aria-label="添加附件"
-                    disabled={running || preparingAttachments}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Paperclip />
-                  </PromptInputButton>
-                </TooltipTrigger>
-                <TooltipContent>添加附件</TooltipContent>
-              </Tooltip>
+              <AttachFilesButton disabled={running || preparingAttachments} />
               <PromptInputSubmit
                 type={running ? "button" : "submit"}
                 status={running ? "streaming" : "ready"}
@@ -1828,14 +1825,6 @@ export default function App() {
             )}
           </div>
         )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          hidden
-        accept={attachmentAccept}
-          multiple
-          onChange={handleFileChange}
-        />
       </footer>
     </div>
   );

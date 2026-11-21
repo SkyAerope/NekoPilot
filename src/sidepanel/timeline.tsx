@@ -11,22 +11,17 @@ import {
   X,
   CheckCircle2,
 } from "lucide-react";
-import type { ToolUIPart } from "ai";
 import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
 } from "@/components/ui/collapsible";
 import {
-  Reasoning,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
-import { Tool, ToolContent } from "@/components/ai-elements/tool";
-import {
   Confirmation,
   ConfirmationTitle,
   ConfirmationActions,
   ConfirmationAction,
+  type ToolConfirmationState,
 } from "@/components/ai-elements/confirmation";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "./markdown";
@@ -238,18 +233,14 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
     .find((line) => line.trim())
     ?.slice(0, 60);
   return (
-    <Reasoning
-      className="mb-0"
-      defaultOpen={false}
+    <Collapsible
       open={open}
       onOpenChange={(value) => {
         setUserTouched(true);
         setExpanded(value);
       }}
-      isStreaming={!done}
-      duration={entry.thinkSeconds}
     >
-      <ReasoningTrigger disabled={!content} className={stepTriggerClassName}>
+      <CollapsibleTrigger disabled={!content} className={stepTriggerClassName}>
         <span className="shrink-0 font-medium">
           {done ? `思考 ${entry.thinkSeconds ?? 1} 秒` : "Thinking…"}
         </span>
@@ -267,7 +258,7 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
             open && "rotate-180",
           )}
         />
-      </ReasoningTrigger>
+      </CollapsibleTrigger>
       <CollapsibleContent className="collapsible-motion">
         <div
           ref={thinkingScroll.scrollRef}
@@ -282,11 +273,11 @@ function ThinkingStep({ entry }: { entry: LogEntry }) {
           </div>
         </div>
       </CollapsibleContent>
-    </Reasoning>
+    </Collapsible>
   );
 }
 
-function getToolState(entry: LogEntry): ToolUIPart["state"] {
+function getToolState(entry: LogEntry): ToolConfirmationState {
   if (entry.toolResult !== undefined)
     return entry.toolSuccess ? "output-available" : "output-error";
   if (entry.toolStage === "generating" || entry.toolStage === "queued")
@@ -320,10 +311,10 @@ function ToolCallStep({
       ? ""
       : subtitle;
   return (
-    <Tool
+    <Collapsible
       open={expanded}
       onOpenChange={setExpanded}
-      className="mb-0 min-w-0 border-0"
+      className="not-prose w-full min-w-0"
     >
       <CollapsibleTrigger
         className={stepTriggerClassName}
@@ -371,7 +362,7 @@ function ToolCallStep({
           awaitingApproval && entry.toolName !== "screenshot" && "border",
         )}
       >
-        <ToolContent className="min-w-0">
+        <CollapsibleContent className="collapsible-motion min-w-0 text-popover-foreground outline-none">
           <div
             className={cn(
               "min-w-0 overflow-hidden rounded-md",
@@ -385,7 +376,7 @@ function ToolCallStep({
               <ToolDetails entry={entry} />
             )}
           </div>
-        </ToolContent>
+        </CollapsibleContent>
         {awaitingApproval && entry.toolCallId && (
           <Confirmation
             state={state}
@@ -412,6 +403,6 @@ function ToolCallStep({
           </Confirmation>
         )}
       </div>
-    </Tool>
+    </Collapsible>
   );
 }

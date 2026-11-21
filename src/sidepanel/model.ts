@@ -145,49 +145,6 @@ export function getToolSubtitle(name?: string, argsStr?: string): string {
   }
 }
 
-export function formatToolArgsMarkdown(
-  name?: string,
-  argsStr?: string,
-): string {
-  if (!argsStr) return "";
-
-  let args: Record<string, unknown>;
-  try {
-    args = JSON.parse(argsStr);
-  } catch {
-    return `\`\`\`text\n${escapeMarkdownCodeFence(argsStr)}\n\`\`\``;
-  }
-
-  if (name === "execute_js") {
-    const parts: string[] = [];
-    if (typeof args.description === "string" && args.description.trim()) {
-      parts.push(`**Description**\n\n${args.description.trim()}`);
-    }
-    if (typeof args.code === "string" && args.code.trim()) {
-      parts.push(
-        `**Code**\n\n\`\`\`js\n${escapeMarkdownCodeFence(args.code)}\n\`\`\``,
-      );
-    }
-    return parts.join("\n\n");
-  }
-
-  return `\`\`\`json\n${escapeMarkdownCodeFence(JSON.stringify(args, null, 2))}\n\`\`\``;
-}
-
-export function formatToolResultMarkdown(
-  name?: string,
-  result?: string,
-): string {
-  if (!result) return "";
-  if (name === "execute_js") {
-    return `\`\`\`json\n${escapeMarkdownCodeFence(result)}\n\`\`\``;
-  }
-  if (/^(\{|\[)/.test(result.trim())) {
-    return `\`\`\`json\n${escapeMarkdownCodeFence(result)}\n\`\`\``;
-  }
-  return result;
-}
-
 // ── 日志分段 ──
 
 export type LogSegment =
@@ -250,10 +207,6 @@ export function groupIntoTurns(segments: LogSegment[]): Turn[] {
   }
   flushModel();
   return turns;
-}
-
-export function escapeMarkdownCodeFence(content: string): string {
-  return content.replace(/```/g, "``\\`");
 }
 
 export function formatTokens(n: number): string {
