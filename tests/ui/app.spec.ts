@@ -1207,15 +1207,26 @@ test("Markdown 表格、公式、代码与无效公式兼容", async ({ page }) 
         id: 1,
         type: "assistant",
         content:
-          '| 字段 | 值 |\n| --- | --- |\n| 状态 | 正常 |\n\n公式：$x^2 + y^2$\n\n\\[\\frac{1}{2}\\]\n\n```js\nconst price = "$20";\n```\n\n无效公式：$\\notARealCommand{a}$',
+          '| 字段 | 值 |\n| --- | --- |\n| 状态 | 正常 |\n\n公式：$x = [a=b]$\n\n\\[\\frac{1}{2}\\]\n\n$$y = [c=d]$$\n\n$$\nz = [e=f]\n$$\n\n[x=1]\n\n行内代码：`\\[x\\]`\n\n```js\nconst price = "$20";\n```\n\n无效公式：$\\notARealCommand{a}$',
         timestamp: 1,
       },
     ],
   });
   await page.goto("/sidepanel.html");
   await expect(page.getByRole("table")).toBeVisible();
-  await expect(page.locator(".katex")).toHaveCount(2);
-  await expect(page.locator("code")).toContainText('const price = "$20";');
+  await expect(page.locator(".katex")).toHaveCount(5);
+  await expect(page.locator(".katex-display")).toHaveCount(4);
+  await expect(page.locator(".katex annotation")).toHaveText([
+    "x = [a=b]",
+    "\\frac{1}{2}",
+    "y = [c=d]",
+    "z = [e=f]",
+    "x=1",
+  ]);
+  await expect(page.locator("code").first()).toHaveText("\\[x\\]");
+  await expect(page.locator("code").nth(1)).toContainText(
+    'const price = "$20";',
+  );
   await expect(page.locator(".katex-error")).toHaveCount(0);
   await expectNoOverflow(page);
 });

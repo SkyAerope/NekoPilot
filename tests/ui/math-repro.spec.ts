@@ -65,6 +65,11 @@ test("流式公式正文末尾不出现孤立美元符号", async ({ page }) => 
   const cases = [
     { name: "普通行内公式", content: "公式：$x^2 + y^2$\n\n正文结束。" },
     {
+      name: "行内公式中的裸方括号",
+      content: "公式：$x^2 = [a=b]$\n\n正文结束。",
+      mathSource: "x^2 = [a=b]",
+    },
+    {
       name: "普通块级公式",
       content: "公式：\n\n$$\nx^2 + y^2\n$$\n\n正文结束。",
     },
@@ -90,6 +95,21 @@ test("流式公式正文末尾不出现孤立美元符号", async ({ page }) => 
       name: "行内代码含反引号与方括号",
       content: "代码：``$20 ` [x=1]``\n\n公式：$x^2 + y^2$\n\n正文结束。",
       codeText: "$20 ` [x=1]",
+    },
+    {
+      name: "行内代码含 LaTeX 方括号定界符",
+      content: "代码：`\\[x\\]`\n\n公式：$x^2 + y^2$\n\n正文结束。",
+      codeText: "\\[x\\]",
+    },
+    {
+      name: "未闭合代码块空行后含美元符号",
+      content:
+        "```js\nconst a = 1;\n\nconst price = $20\n```\n\n公式：$x^2 + y^2$\n\n正文结束。",
+      codeText: "const price = $20",
+      streamingCodeCheck: {
+        prefix: "```js\nconst a = 1;\n\nconst price = $20",
+        forbidden: "$20$",
+      },
     },
     {
       name: "波浪代码围栏和公式",
@@ -133,14 +153,29 @@ test("流式公式正文末尾不出现孤立美元符号", async ({ page }) => 
     const markdown = page.locator(".markdown").last();
     const endMarker = sample.content.indexOf("正文结束。");
     const mathStart = sample.content.lastIndexOf("$x^2");
+    let emittedLength = 0;
+    if ("streamingCodeCheck" in sample && sample.streamingCodeCheck) {
+      const { prefix, forbidden } = sample.streamingCodeCheck;
+      await emit("message_delta", prefix);
+      emittedLength = prefix.length;
+      await expect(markdown.locator("code")).toContainText("const price = $20");
+      await expect(markdown).not.toContainText(forbidden);
+    }
     if (mathStart >= 0 && sample.name !== "金额和公式混排") {
       // 公式未闭合时仍应预览，确保修复没有直接禁用流式补全。
-      const previewEnd = mathStart + "$x^2".length;
-      await emit("message_delta", sample.content.slice(0, previewEnd));
+      const previewEnd = sample.mathSource
+        ? mathStart + 1 + sample.mathSource.length
+        : mathStart + "$x^2".length;
+      await emit("message_delta", sample.content.slice(emittedLength, previewEnd));
       await expect(markdown.locator(".katex")).toHaveCount(1);
+      if (sample.mathSource) {
+        await expect(markdown.locator(".katex annotation")).toHaveText(
+          sample.mathSource,
+        );
+      }
       await emit("message_delta", sample.content.slice(previewEnd, endMarker));
     } else {
-      await emit("message_delta", sample.content.slice(0, endMarker));
+      await emit("message_delta", sample.content.slice(emittedLength, endMarker));
     }
     await emit("message_delta", sample.content.slice(endMarker));
     await expect(markdown).toContainText("正文结束。");
@@ -148,6 +183,11 @@ test("流式公式正文末尾不出现孤立美元符号", async ({ page }) => 
     await expect(markdown.locator(".katex-error")).toHaveCount(0);
     if (sample.name !== "金额和公式混排") {
       await expect(markdown.locator(".katex")).toHaveCount(1);
+    }
+    if (sample.mathSource) {
+      await expect(markdown.locator(".katex annotation")).toHaveText(
+        sample.mathSource,
+      );
     }
     if (sample.codeText) {
       await expect(markdown.locator("code")).toContainText(sample.codeText, {
